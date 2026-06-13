@@ -229,3 +229,167 @@ python -m pytest
 
 See `requirements.txt` for pinned dependencies (`openpyxl`, `opencv-python-headless`, `numpy`,
 `scikit-learn`, `requests`, `pytest`, `hypothesis`).
+
+---
+
+## Hướng dẫn theo từng trường hợp (Tiếng Việt)
+
+Tất cả lệnh chạy **từ thư mục gốc của project** bằng trình Python trong `.venv`. Mở PowerShell,
+`cd` vào thư mục project, rồi mỗi phiên làm việc đặt biến môi trường một lần:
+
+```powershell
+$env:PYTHONPATH = "src"
+```
+
+> Vì package nằm trong `src\` và không cài editable, cần `$env:PYTHONPATH = "src"` trước khi chạy
+> `-m qipedc2vsl400.convert`. Có thể dùng trực tiếp `.\.venv\Scripts\python.exe` mà không cần
+> "activate" venv.
+
+### Cơ chế phân cụm signer (để hiểu các mode bên dưới)
+
+Mỗi clip được rút thành một **vector embedding khuôn mặt 128 chiều** (OpenCV YuNet phát hiện mặt →
+SFace sinh embedding → trung bình, chuẩn hóa L2). Hai clip được coi là **cùng một người** khi hai
+vector gần nhau theo **cosine distance** (ngưỡng `--signer-threshold`, mặc định `0.363`). Các vector
+này là thứ được lưu lại trong cache / clip store / registry.
+
+Lưu ý chung về đánh số: trong **một lần chạy**, mọi clip của một người luôn cùng một `signer_id`.
+Nhưng **con số** `signer_001/002/...` có thể đổi nhãn giữa các lần chạy (trừ khi dùng
+`--stable-signers`).
+
+---
+
+### Trường hợp 1 — Chạy lần đầu từ đầu (máy mới)
+
+1. Đặt dữ liệu đúng chỗ:
+   - Label QIPEDC: `Dataset\labels\*.xlsx` (header: `STT, ID, VIDEO, LABEL, REGION, TOPIC, signer`).
+   - Video: `Dataset\processed_videos\resize_720p\*.mp4` (và/hoặc `Dataset\raw_videos\`).
+2. Tạo môi trường venv trên D::
+   ```powershell
+   powershell -ExecutionPolicy Bypass -File .\setup_env.ps1
+   ```
+3. Chạy chuyển đổi (lần đầu tự tải VSL400 labels + model khuôn mặt):
+   ```powershell
+   $env:PYTHONPATH = "src"
+   .\.venv\Scripts\python.exe -m qipedc2vsl400.convert
+   ```
+4. Kết quả: `Dataset\final_dataset\front_view.json`, `signers.csv`, `Dataset\by_signer\...`,
+   log trong `Dataset\logs\`. Mã thoát `0` nghĩa là verify đạt (`echo $LASTEXITCODE`).
+
+### Trường hợp 2 — Đã chạy 1 lần, thêm video mới (KHÔNG xóa video cũ)
+
+Vẫn giữ toàn bộ video cũ trên đĩa. Nhớ thêm **dòng label** cho video mới vào `*.xlsx`.
+
+- Cách nhanh (chỉ embed clip mới, dùng lại embedding cũ qua cache):
+  ```powershell
+  $env:PYTHONPATH = "src"
+  # lần đầu bật cache để dựng cache:
+  .\.venv\Scripts\python.exe -m qipedc2vsl400.convert --embeddings-cache
+  # sau khi thêm video mới + dòng label, chỉ clip mới được embed:
+  .\.venv\Scripts\python.exe -m qipedc2vsl400.convert --no-fetch --embeddings-cache
+  ```
+- `--no-fetch`: bỏ tải mạng (model + VSL400 labels đã có).
+- **Không** dùng `--skip-signer` ở đây (nó bỏ qua trích xuất, clip mới sẽ rơi vào `unknown`).
+- Kết quả: phân cụm lại trên toàn bộ (cũ + mới) → đúng; clip mới trùng người với clip cũ vào chung
+  cụm. Số `signer_id` có thể đổi nhãn so với lần trước.
+
+### Trường hợp 3 — Video quá nặng, chạy theo từng đợt (xóa cũ, thêm mới)
+
+Dùng chế độ batch: clip store tích lũy nên metadata cuối luôn đủ cả các đợt, kể cả video đã xóa.
+
+```powershell
+$env:PYTHONPATH = "src"
+# Đợt 1: bỏ video đợt 1 + dòng label tương ứng, rồi:
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch
+# Xóa video đợt 1, bỏ video đợt 2 + dòng label, rồi:
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch
+# ... lặp lại cho từng đợt
+```
+
+- `--batch` giả định **model đã tải sẵn** (chạy Trường hợp 1 một lần trước, hoặc đã có
+  `Dataset\models\`). Nó không tự fetch.
+- Phân cụm chạy trên **toàn bộ kho** (cũ + mới) → clip mới trùng người với clip cũ (đã xóa video)
+  vẫn vào **chung cụm**, và metadata vẫn xuất đủ clip cũ.
+- `Dataset\by_signer\` chỉ chứa được video còn trên đĩa; clip của đợt đã xóa sẽ không có thư mục để
+  xem lại (nhưng metadata vẫn đủ).
+
+### Trường hợp 4 — Muốn `signer_id` CỐ ĐỊNH giữa các lần chạy
+
+Thêm `--stable-signers` (kết hợp `--batch`). Một người được khớp với signer cũ sẽ **giữ nguyên số**;
+người mới mới được cấp số mới; số cũ không bao giờ đổi.
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch --stable-signers
+# các đợt sau cũng thêm --stable-signers
+```
+
+- Khi muốn gom lại tối ưu toàn cục + đánh số lại (vd để gộp hai signer thật ra là một người):
+  ```powershell
+  .\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch --stable-signers --recluster
+  ```
+- Lưu ý: chế độ ổn định gán "trực tuyến" (phụ thuộc thứ tự) và **không tự gộp** hai `signer_id` đã
+  đăng ký — dùng `--recluster` khi cần gộp/đặt lại số.
+
+### Trường hợp 5 — Chạy lại nhanh trên dữ liệu không đổi
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --no-fetch --skip-signer
+```
+`--skip-signer` dùng lại `signers.csv` đã có (không nhúng lại). Chỉ dùng khi **không** thêm clip mới.
+
+### Trường hợp 6 — Đổi đường dẫn video / output / thư mục signer
+
+Các đường dẫn nằm trong `Config` (`src\qipedc2vsl400\config.py`). CLI chỉ cho đổi vài thứ qua flag,
+nên đổi đường dẫn thì:
+
+- **Cách A** — sửa giá trị mặc định trong `config.py`. Các field hay đổi: `video_search_dirs`
+  (nơi tìm video), `foldering_source` (nguồn gom signer), `by_signer_dir`, `output_dir`,
+  `output_view_name`, `qipedc_labels_glob`, `models_dir`. Đường dẫn có thể tương đối (ghép vào
+  `project_root`) hoặc tuyệt đối.
+- **Cách B** — viết script ghi đè bằng `dataclasses.replace` mà không sửa code gốc:
+  ```python
+  from pathlib import Path
+  import dataclasses
+  from qipedc2vsl400.config import Config
+  from qipedc2vsl400.convert import run_pipeline
+
+  cfg = Config(project_root=Path.cwd())
+  cfg = dataclasses.replace(
+      cfg,
+      video_search_dirs=("E:/my_videos",),
+      foldering_source="E:/my_videos",
+      output_dir="E:/output/metadata",
+  )
+  raise SystemExit(run_pipeline(cfg, fetch=False).exit_code)
+  ```
+
+### Trường hợp 7 — Xóa bớt clip khỏi dataset
+
+- Khi muốn loại một clip: xóa **cả dòng label** của nó (và file video). Chỉ xóa file video mà giữ
+  dòng label sẽ khiến clip bị skip-and-log (chế độ thường) hoặc bị kéo vào cụm "ma" nếu còn trong
+  cache/kho.
+- Chế độ batch: dùng `--prune-missing` (với `--batch`) để bỏ khỏi kho các clip **không** có trong
+  dòng label hiện tại — chỉ dùng khi file label đang liệt kê **toàn bộ** dataset mong muốn (nếu
+  không sẽ xóa nhầm các đợt cũ).
+
+### Bảng chọn nhanh
+
+| Tình huống | Lệnh |
+| --- | --- |
+| Lần đầu từ đầu | `... convert` |
+| Thêm video mới (giữ video cũ) | `... convert --no-fetch --embeddings-cache` |
+| Chạy lại nhanh, dữ liệu không đổi | `... convert --no-fetch --skip-signer` |
+| Chạy theo đợt (xóa cũ thêm mới) | `... convert --batch` |
+| Chạy theo đợt + giữ cố định số signer | `... convert --batch --stable-signers` |
+| Gom lại + đánh số lại (chế độ ổn định) | `... convert --batch --stable-signers --recluster` |
+
+(`...` = `.\.venv\Scripts\python.exe -m qipedc2vsl400`, sau khi đã `$env:PYTHONPATH = "src"`.)
+
+### Kiểm tra kết quả nhanh
+
+```powershell
+echo $LASTEXITCODE                       # 0 = verify đạt
+Get-Content Dataset\by_signer\_summary.txt
+Get-ChildItem Dataset\final_dataset\
+```
