@@ -97,6 +97,7 @@ Useful flags:
 | --- | --- |
 | `--no-fetch` | Skip the Zenodo label + ONNX model download (use after the first run). |
 | `--skip-signer` | Reuse an existing `signers.csv` instead of re-embedding every clip. |
+| `--embeddings-cache` | Cache per-clip face embeddings and reuse them on re-runs, so only newly added clips are embedded (see *Adding new clips* below). |
 | `--on-missing-video {skip,placeholder}` | Policy when a referenced video is missing/unreadable (default: `skip`). |
 | `--copy-mode {hardlink,copy}` | How clips are placed into per-signer folders (default: `hardlink`). |
 | `--signer-threshold <float>` | Cosine "same-signer" distance threshold for clustering (default `0.363`). |
@@ -108,6 +109,31 @@ A fast re-run that reuses the previous signer extraction and skips downloads:
 $env:PYTHONPATH = "src"
 .\.venv\Scripts\python.exe -m qipedc2vsl400.convert --no-fetch --skip-signer
 ```
+
+### Adding new clips later (incremental embedding cache)
+
+When you add more videos (with matching rows in the label spreadsheet) and re-run, signer
+extraction normally re-embeds **every** clip — the costly step. Pass `--embeddings-cache` to keep a
+cache of per-clip face embeddings (`Dataset/final_dataset/embeddings.npz`, git-ignored) so only the
+**new** clips are embedded; the cached vectors are reused for everything seen before:
+
+```powershell
+$env:PYTHONPATH = "src"
+# first run: builds the cache while converting
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --embeddings-cache
+# after adding new clips + their label rows: only new clips get embedded
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --no-fetch --embeddings-cache
+```
+
+The cache is purely a speed optimization: clustering still runs over **all** clips (cached + new),
+so the result is identical to a full re-run. New clips of an existing person join that person's
+cluster (same `signer_id`); new people get new clusters. Within any single run, all clips of one
+person always share one `signer_id`. (Note: the numeric label assigned to a given person — e.g.
+`signer_001` — may differ between runs, since clusters are numbered by their smallest `VIDEO`
+filename; within one output it is always consistent.)
+
+> Do **not** combine `--embeddings-cache` with `--skip-signer`: `--skip-signer` bypasses extraction
+> entirely (reusing `signers.csv`), so new clips would all fall into the `unknown` bucket.
 
 ### 4. Outputs
 

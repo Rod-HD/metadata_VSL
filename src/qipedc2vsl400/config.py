@@ -54,6 +54,7 @@ class Config:
     signer_cosine_threshold: float = 0.363  # SFace "same identity" cosine threshold
     signer_unknown_label: str = "unknown"  # bucket when no face detected
     signer_sidecar: str = "signers.csv"  # per-clip VIDEO -> signer_id + distance
+    signer_embeddings_cache: str = "embeddings.npz"  # cached per-clip face embeddings
 
     # --- per-signer foldering (Req 9) ---
     by_signer_dir: str = "Dataset/by_signer"
@@ -107,6 +108,15 @@ class Config:
     def signer_sidecar_path(self) -> Path:
         """Absolute path to the signer side-car CSV under the output dir."""
         return self.output_path / self.signer_sidecar
+
+    @property
+    def signer_embeddings_cache_path(self) -> Path:
+        """Absolute path to the cached per-clip face embeddings (under output dir).
+
+        Used by the incremental signer-extraction cache so that, on a re-run,
+        only clips not already present in the cache are re-embedded.
+        """
+        return self.output_path / self.signer_embeddings_cache
 
     def video_search_paths(self) -> tuple[Path, ...]:
         """Absolute paths of every configured video search directory."""

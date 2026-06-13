@@ -216,6 +216,7 @@ def run_pipeline(
     embed_fn: Callable[[Path | None, Any], Any] | None = None,
     fetch: bool = True,
     skip_signer: bool = False,
+    embeddings_cache: "Path | str | None" = None,
     session: Any | None = None,
 ) -> PipelineResult:
     """Run the end-to-end conversion pipeline.
@@ -235,6 +236,11 @@ def run_pipeline(
             face models; ``--no-fetch`` sets this ``False``.
         skip_signer: When ``True`` reuse an existing ``signers.csv`` instead of
             re-embedding and clustering.
+        embeddings_cache: Optional path to a NumPy ``.npz`` embedding cache. When
+            given (and not ``skip_signer``), only clips missing from the cache
+            are re-embedded; clustering still runs over the full set, so the
+            result matches a full re-run while skipping the expensive embedding
+            of previously-seen clips.
         session: Optional ``requests.Session`` passed through to the fetch
             stage (injectable for testing).
 
@@ -280,8 +286,14 @@ def run_pipeline(
                 cfg.signer_sidecar_path,
             )
         else:
-            signer_assignments = extract_signers(valid_rows, cfg, embed_fn=embed_fn)
-            logger.info("Extracted signers for %d clips", len(signer_assignments))
+            signer_assignments = extract_signers(
+                valid_rows, cfg, embed_fn=embed_fn, embeddings_cache=embeddings_cache
+            )
+            logger.info(
+                "Extracted signers for %d clips%s",
+                len(signer_assignments),
+                " (embedding cache enabled)" if embeddings_cache else "",
+            )
 
         # 4) Map rows -> superset records (probing each clip).
         records, skipped_videos = build_records(
@@ -368,6 +380,14 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="Reuse an existing signers.csv instead of re-embedding clips.",
     )
     parser.add_argument(
+        "--embeddings-cache",
+        action="store_true",
+        help=(
+            "Cache per-clip face embeddings (under the output dir) and reuse them "
+            "on re-runs, so only newly added clips are embedded."
+        ),
+    )
+    parser.add_argument(
         "--copy-mode",
         choices=["hardlink", "copy"],
         default=None,
@@ -427,6 +447,9 @@ def main(argv: list[str] | None = None) -> int:
         cfg,
         fetch=not args.no_fetch,
         skip_signer=args.skip_signer,
+        embeddings_cache=(
+            cfg.signer_embeddings_cache_path if args.embeddings_cache else None
+        ),
     )
 
     print(result.summary)

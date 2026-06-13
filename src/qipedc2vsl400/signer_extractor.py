@@ -333,10 +333,69 @@ def _cluster_labels(embeddings: list[np.ndarray], cfg: Any) -> list[int]:
     return [int(label) for label in labels]
 
 
+def load_embeddings_cache(
+    cache_path: "Path | str",
+) -> tuple[dict[str, np.ndarray], set[str]]:
+    """Load cached per-clip face embeddings from *cache_path*.
+
+    Returns ``(vectors_by_video, noface_videos)`` where ``vectors_by_video`` maps
+    a ``VIDEO`` filename to its stored embedding vector and ``noface_videos`` is
+    the set of clips previously found to have no detectable face. Returns empty
+    containers when the cache file does not exist (first run).
+
+    The cache is a NumPy ``.npz`` archive loaded with ``allow_pickle=False`` (no
+    arbitrary-object deserialization).
+    """
+    path = Path(cache_path)
+    if not path.is_file():
+        return {}, set()
+    with np.load(path, allow_pickle=False) as data:
+        face_names = [str(name) for name in data["videos_face"]]
+        emb = data["emb"]
+        vectors = {
+            name: np.asarray(emb[i], dtype=np.float64)
+            for i, name in enumerate(face_names)
+        }
+        noface = {str(name) for name in data["videos_noface"]}
+    return vectors, noface
+
+
+def save_embeddings_cache(
+    cache_path: "Path | str",
+    vectors_by_video: dict[str, np.ndarray],
+    noface_videos: set[str],
+) -> Path:
+    """Persist per-clip face embeddings to *cache_path* (NumPy ``.npz``).
+
+    Stores the face embeddings (one row per clip), the parallel list of clip
+    filenames, and the list of no-face clips. Filenames are stored as fixed-width
+    unicode arrays so the archive needs no pickling. Returns the path written.
+    """
+    path = Path(cache_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    face_names = list(vectors_by_video.keys())
+    if face_names:
+        emb = np.stack(
+            [np.asarray(vectors_by_video[name], dtype=np.float64).reshape(-1)
+             for name in face_names],
+            axis=0,
+        )
+    else:
+        emb = np.zeros((0, 0), dtype=np.float64)
+    np.savez(
+        path,
+        videos_face=np.array(face_names, dtype=str),
+        emb=emb,
+        videos_noface=np.array(sorted(noface_videos), dtype=str),
+    )
+    return path
+
+
 def extract_signers(
     valid_rows: list[Any],
     cfg: Any,
     embed_fn: Callable[[Path | None, Any], np.ndarray | None] = embed_clip,
+    embeddings_cache: "Path | str | None" = None,
 ) -> list[SignerAssignment]:
     """Assign a signer identity to every valid QIPEDC clip (Requirement 8).
 
@@ -366,6 +425,13 @@ def extract_signers(
         embed_fn: Injectable embedding function ``(video_path, cfg) -> vector |
             None``; defaults to :func:`embed_clip`. Tests pass a deterministic
             stub so no real videos or models are required.
+        embeddings_cache: Optional path to a NumPy ``.npz`` embedding cache. When
+            given, clips already present in the cache reuse their stored
+            embedding (the expensive face detection/embedding is skipped) and
+            only **new** clips are embedded via *embed_fn*; the cache is then
+            updated with any newly computed embeddings. Clustering still runs
+            over the full set (cached + new), so the result is identical to a
+            full re-run — the cache is purely a performance optimization.
 
     Returns:
         A list of :class:`SignerAssignment`, one per row in *valid_rows*, in the
@@ -375,13 +441,38 @@ def extract_signers(
     try:
         index = _build_video_index(cfg)
 
-        # 1) Embed every clip, preserving row order. Record which rows produced
-        #    a usable embedding so the rest are routed to the unknown bucket.
+        # 0) Load any existing embedding cache (incremental re-runs).
+        cache_vectors: dict[str, np.ndarray] = {}
+        cache_noface: set[str] = set()
+        if embeddings_cache is not None:
+            cache_vectors, cache_noface = load_embeddings_cache(embeddings_cache)
+            logger.info(
+                "Loaded embedding cache: %d face, %d no-face from %s",
+                len(cache_vectors),
+                len(cache_noface),
+                embeddings_cache,
+            )
+
+        # 1) Embed every clip, preserving row order. Cached clips reuse their
+        #    stored embedding; only new clips are embedded via ``embed_fn``.
+        #    Rows without a usable embedding are routed to the unknown bucket.
         videos: list[str] = []
         embeddings_per_row: list[np.ndarray | None] = []
+        cache_hits = 0
+        newly_computed = 0
         for row in valid_rows:
             video = row.video or ""
             videos.append(video)
+
+            if embeddings_cache is not None and video in cache_vectors:
+                embeddings_per_row.append(cache_vectors[video])
+                cache_hits += 1
+                continue
+            if embeddings_cache is not None and video in cache_noface:
+                embeddings_per_row.append(None)
+                cache_hits += 1
+                continue
+
             path = _resolve_video_path(row.video, index)
             if path is None:
                 logger.warning("No video file found for VIDEO %r", video)
@@ -390,13 +481,32 @@ def extract_signers(
             # returning ``None``, and test stubs supply synthetic vectors
             # without needing real files on disk.
             embedding = embed_fn(path, cfg)
+            newly_computed += 1
             if embedding is None:
                 logger.warning(
                     "No face/embedding for VIDEO %r; routing to %r bucket",
                     video,
                     cfg.signer_unknown_label,
                 )
+                if embeddings_cache is not None:
+                    cache_noface.add(video)
+            elif embeddings_cache is not None:
+                cache_vectors[video] = np.asarray(
+                    embedding, dtype=np.float64
+                ).reshape(-1)
             embeddings_per_row.append(embedding)
+
+        # 1b) Persist the (possibly extended) cache for the next run.
+        if embeddings_cache is not None:
+            save_embeddings_cache(embeddings_cache, cache_vectors, cache_noface)
+            logger.info(
+                "Saved embedding cache: %d face, %d no-face "
+                "(cache hits=%d, computed=%d)",
+                len(cache_vectors),
+                len(cache_noface),
+                cache_hits,
+                newly_computed,
+            )
 
         # 2) Cluster the non-None embeddings (AC2/AC3).
         face_row_indices = [

@@ -8,6 +8,7 @@ Dataset/raw_videos/
 Dataset/by_signer/
 Dataset/models/
 Dataset/labels/vsl400/*.zip
+Dataset/final_dataset/embeddings.npz
 
 # Python bytecode
 __pycache__/
