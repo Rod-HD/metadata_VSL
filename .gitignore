@@ -22,6 +22,10 @@ __pycache__/
 .vscode/
 .idea/
 
+# Local-only personal guide / scratch runner (never committed)
+HUONG_DAN_CHI_TIET.md
+run_custom.py
+
 # Tooling caches (kept on D:, never committed)
 .pytest_cache/
 .hypothesis/
