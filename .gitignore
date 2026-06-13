@@ -9,6 +9,8 @@ Dataset/by_signer/
 Dataset/models/
 Dataset/labels/vsl400/*.zip
 Dataset/final_dataset/embeddings.npz
+Dataset/final_dataset/clip_store.json
+Dataset/final_dataset/clip_store_embeddings.npz
 
 # Python bytecode
 __pycache__/

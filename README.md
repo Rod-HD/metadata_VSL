@@ -98,6 +98,8 @@ Useful flags:
 | `--no-fetch` | Skip the Zenodo label + ONNX model download (use after the first run). |
 | `--skip-signer` | Reuse an existing `signers.csv` instead of re-embedding every clip. |
 | `--embeddings-cache` | Cache per-clip face embeddings and reuse them on re-runs, so only newly added clips are embedded (see *Adding new clips* below). |
+| `--batch` | Batch/incremental mode using a persistent clip store, for video sets too large to hold on disk at once (see *Batch mode* below). |
+| `--prune-missing` | With `--batch`, drop stored clips not in the current label rows (use only when the label file lists the full dataset). |
 | `--on-missing-video {skip,placeholder}` | Policy when a referenced video is missing/unreadable (default: `skip`). |
 | `--copy-mode {hardlink,copy}` | How clips are placed into per-signer folders (default: `hardlink`). |
 | `--signer-threshold <float>` | Cosine "same-signer" distance threshold for clustering (default `0.363`). |
@@ -134,6 +136,43 @@ filename; within one output it is always consistent.)
 
 > Do **not** combine `--embeddings-cache` with `--skip-signer`: `--skip-signer` bypasses extraction
 > entirely (reusing `signers.csv`), so new clips would all fall into the `unknown` bucket.
+
+### Batch mode for very large video sets (`--batch`)
+
+If the full video set is too large to keep on disk at once, process it in batches: add a batch's
+videos, run, delete them, then bring in the next batch. `--batch` accumulates everything needed to
+emit and cluster each clip into a persistent **clip store** (`Dataset/final_dataset/clip_store.json`
++ `clip_store_embeddings.npz`, both git-ignored), so the output always covers **all** clips ever
+processed — even ones whose video files have since been deleted.
+
+```powershell
+$env:PYTHONPATH = "src"
+# Batch 1: put batch-1 videos + their label rows in place, then:
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch
+# delete batch-1 videos, add batch-2 videos + label rows, then:
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch
+# ...repeat for each batch
+```
+
+How it behaves each run:
+
+- A clip already in the store is kept as-is (its video need not be present).
+- A clip new to the store is probed + embedded from its on-disk video and added to the store.
+- A clip in the labels but with no on-disk video and not yet in the store is skipped-and-logged.
+
+Clustering runs over **all** stored embeddings (old + new), so a new clip of a previously-seen
+person joins that person's cluster and shares its `signer_id` — even if that person's earlier videos
+were deleted. (`signer_id` numbers may still be relabeled between runs, as noted above.)
+
+Notes / limits:
+
+- `--batch` assumes the ONNX face models are already downloaded (run once normally, or with
+  `--embeddings-cache`, first). It does not fetch.
+- `Dataset/by_signer/` can only contain clips whose videos are currently on disk; clips deleted in
+  earlier batches won't appear there for manual review (their metadata is still emitted).
+- `--prune-missing` (with `--batch`) drops stored clips whose `video_id` is not in the **current**
+  label rows. Use it only when the label file lists the full intended dataset; otherwise it would
+  drop earlier batches.
 
 ### 4. Outputs
 

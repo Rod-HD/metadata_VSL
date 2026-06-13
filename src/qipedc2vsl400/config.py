@@ -55,6 +55,9 @@ class Config:
     signer_unknown_label: str = "unknown"  # bucket when no face detected
     signer_sidecar: str = "signers.csv"  # per-clip VIDEO -> signer_id + distance
     signer_embeddings_cache: str = "embeddings.npz"  # cached per-clip face embeddings
+    # --- batch / incremental clip store (accumulates across batches) ---
+    clip_store_json: str = "clip_store.json"  # per-clip records + props (human-readable)
+    clip_store_embeddings: str = "clip_store_embeddings.npz"  # per-clip embeddings (binary)
 
     # --- per-signer foldering (Req 9) ---
     by_signer_dir: str = "Dataset/by_signer"
@@ -117,6 +120,16 @@ class Config:
         only clips not already present in the cache are re-embedded.
         """
         return self.output_path / self.signer_embeddings_cache
+
+    @property
+    def clip_store_json_path(self) -> Path:
+        """Absolute path to the batch clip-store JSON (records + probed props)."""
+        return self.output_path / self.clip_store_json
+
+    @property
+    def clip_store_embeddings_path(self) -> Path:
+        """Absolute path to the batch clip-store embeddings (binary ``.npz``)."""
+        return self.output_path / self.clip_store_embeddings
 
     def video_search_paths(self) -> tuple[Path, ...]:
         """Absolute paths of every configured video search directory."""

@@ -333,6 +333,60 @@ def _cluster_labels(embeddings: list[np.ndarray], cfg: Any) -> list[int]:
     return [int(label) for label in labels]
 
 
+def assign_signers(
+    order_keys: list[str],
+    embeddings: list[np.ndarray | None],
+    cfg: Any,
+) -> list[tuple[str, int, float | None, bool]]:
+    """Cluster *embeddings* and assign deterministic signer ids.
+
+    This is the shared clustering/numbering core used by both per-row signer
+    extraction and the batch clip-store flow.
+
+    Args:
+        order_keys: One string per item, used purely to order clusters
+            deterministically (clusters are numbered by the *minimum* key among
+            their members). Typically the ``VIDEO`` filename or ``video_id``.
+        embeddings: One embedding per item, aligned with *order_keys*; ``None``
+            marks a clip with no detectable face (routed to the unknown bucket).
+        cfg: A :class:`~qipedc2vsl400.config.Config`-like object.
+
+    Returns:
+        A list aligned with the inputs of
+        ``(signer_id, cluster_index, distance, has_face)`` tuples. Items with a
+        face get a zero-padded ``signer_id`` (width ``cfg.signer_id_width``) and
+        the cosine ``distance`` to their cluster representative; items without a
+        face get ``(cfg.signer_unknown_label, -1, None, False)``.
+    """
+    face_idx = [i for i, emb in enumerate(embeddings) if emb is not None]
+    face_emb = [embeddings[i] for i in face_idx]
+    raw_labels = _cluster_labels(face_emb, cfg)
+
+    clusters: dict[int, list[int]] = defaultdict(list)
+    for local_idx, raw_label in enumerate(raw_labels):
+        clusters[raw_label].append(face_idx[local_idx])
+
+    ordered_raw_labels = sorted(
+        clusters.keys(),
+        key=lambda lbl: min(order_keys[i] for i in clusters[lbl]),
+    )
+
+    width = cfg.signer_id_width
+    result: list[tuple[str, int, float | None, bool]] = [
+        (cfg.signer_unknown_label, -1, None, False) for _ in embeddings
+    ]
+    for ordered_index, raw_label in enumerate(ordered_raw_labels):
+        members = clusters[raw_label]
+        signer_id = str(ordered_index + 1).zfill(width)
+        representative = np.mean(
+            np.stack([embeddings[i] for i in members], axis=0), axis=0
+        )
+        for i in members:
+            distance = _cosine_distance(embeddings[i], representative)
+            result[i] = (signer_id, ordered_index, distance, True)
+    return result
+
+
 def load_embeddings_cache(
     cache_path: "Path | str",
 ) -> tuple[dict[str, np.ndarray], set[str]]:
@@ -508,67 +562,23 @@ def extract_signers(
                 newly_computed,
             )
 
-        # 2) Cluster the non-None embeddings (AC2/AC3).
-        face_row_indices = [
-            i for i, emb in enumerate(embeddings_per_row) if emb is not None
+        # 2-6) Cluster the embeddings and assign deterministic signer ids,
+        #      ordered by the minimum VIDEO filename per cluster (AC2-AC5).
+        per_row = assign_signers(videos, embeddings_per_row, cfg)
+        assignments = [
+            SignerAssignment(
+                video=videos[i],
+                signer_id=signer_id,
+                cluster_index=cluster_index,
+                distance=distance,
+                has_face=has_face,
+            )
+            for i, (signer_id, cluster_index, distance, has_face) in enumerate(
+                per_row
+            )
         ]
-        face_embeddings = [embeddings_per_row[i] for i in face_row_indices]
-        raw_labels = _cluster_labels(face_embeddings, cfg)
 
-        # 3) Group the row indices by their raw cluster label.
-        clusters: dict[int, list[int]] = defaultdict(list)
-        for local_idx, raw_label in enumerate(raw_labels):
-            row_idx = face_row_indices[local_idx]
-            clusters[raw_label].append(row_idx)
-
-        # 4) Deterministic numbering: order clusters by the minimum VIDEO
-        #    filename among their members (AC4).
-        ordered_raw_labels = sorted(
-            clusters.keys(),
-            key=lambda lbl: min(videos[i] for i in clusters[lbl]),
-        )
-
-        # 5) Compute per-cluster representative (mean embedding) for distances.
-        width = cfg.signer_id_width
-        # Map each row index -> (signer_id, cluster_index, distance).
-        assignment_by_row: dict[int, tuple[str, int, float | None]] = {}
-        for ordered_index, raw_label in enumerate(ordered_raw_labels):
-            member_rows = clusters[raw_label]
-            signer_id = str(ordered_index + 1).zfill(width)
-            member_embeddings = [embeddings_per_row[i] for i in member_rows]
-            representative = np.mean(np.stack(member_embeddings, axis=0), axis=0)
-            for row_idx in member_rows:
-                emb = embeddings_per_row[row_idx]
-                distance = _cosine_distance(emb, representative)
-                assignment_by_row[row_idx] = (signer_id, ordered_index, distance)
-
-        # 6) Build the per-row assignments, defaulting to the unknown bucket
-        #    (AC5 / Property 10: every valid clip is accounted for exactly once).
-        assignments: list[SignerAssignment] = []
-        for row_idx, video in enumerate(videos):
-            if row_idx in assignment_by_row:
-                signer_id, cluster_index, distance = assignment_by_row[row_idx]
-                assignments.append(
-                    SignerAssignment(
-                        video=video,
-                        signer_id=signer_id,
-                        cluster_index=cluster_index,
-                        distance=distance,
-                        has_face=True,
-                    )
-                )
-            else:
-                assignments.append(
-                    SignerAssignment(
-                        video=video,
-                        signer_id=cfg.signer_unknown_label,
-                        cluster_index=-1,
-                        distance=None,
-                        has_face=False,
-                    )
-                )
-
-        signer_count = len(ordered_raw_labels)
+        signer_count = len({a.signer_id for a in assignments if a.has_face})
         unknown_count = sum(1 for a in assignments if not a.has_face)
         logger.info(
             "Signer extraction summary: clips=%d signers=%d unknown=%d",
@@ -615,3 +625,11 @@ def _write_signers_csv(assignments: list[SignerAssignment], cfg: Any) -> Path:
                 ]
             )
     return sidecar_path
+
+
+def write_signers_csv(assignments: list[SignerAssignment], cfg: Any) -> Path:
+    """Public wrapper around :func:`_write_signers_csv` for reuse by other modules
+    (e.g. the batch clip-store flow). Writes the per-clip signer side-car CSV to
+    ``cfg.signer_sidecar_path`` and returns the path written.
+    """
+    return _write_signers_csv(assignments, cfg)
