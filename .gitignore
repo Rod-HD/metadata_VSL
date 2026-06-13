@@ -1,0 +1,28 @@
+# Project-local virtual environment and caches (kept on D:, never committed)
+.venv/
+.pip-cache/
+
+# Large media and generated artifacts (never committed)
+Dataset/processed_videos/
+Dataset/raw_videos/
+Dataset/by_signer/
+Dataset/models/
+Dataset/labels/vsl400/*.zip
+
+# Python bytecode
+__pycache__/
+*.pyc
+
+# Editor / tooling workspace metadata (not part of the deliverable)
+.kiro/
+.vscode/
+.idea/
+
+# Tooling caches (kept on D:, never committed)
+.pytest_cache/
+.hypothesis/
+
+# Run logs, intermediate artifacts, and large reference docs
+Dataset/logs/
+Dataset/extracted_keypoints/
+*.pdf
