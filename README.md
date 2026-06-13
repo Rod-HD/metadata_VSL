@@ -100,6 +100,8 @@ Useful flags:
 | `--embeddings-cache` | Cache per-clip face embeddings and reuse them on re-runs, so only newly added clips are embedded (see *Adding new clips* below). |
 | `--batch` | Batch/incremental mode using a persistent clip store, for video sets too large to hold on disk at once (see *Batch mode* below). |
 | `--prune-missing` | With `--batch`, drop stored clips not in the current label rows (use only when the label file lists the full dataset). |
+| `--stable-signers` | With `--batch`, keep `signer_id` stable across runs via a persistent signer registry (see *Stable signer ids* below). |
+| `--recluster` | With `--batch --stable-signers`, re-cluster the whole store and re-seed the registry (numbers may change). |
 | `--on-missing-video {skip,placeholder}` | Policy when a referenced video is missing/unreadable (default: `skip`). |
 | `--copy-mode {hardlink,copy}` | How clips are placed into per-signer folders (default: `hardlink`). |
 | `--signer-threshold <float>` | Cosine "same-signer" distance threshold for clustering (default `0.363`). |
@@ -173,6 +175,35 @@ Notes / limits:
 - `--prune-missing` (with `--batch`) drops stored clips whose `video_id` is not in the **current**
   label rows. Use it only when the label file lists the full intended dataset; otherwise it would
   drop earlier batches.
+
+### Stable signer ids across runs (`--stable-signers`)
+
+By default the `signer_id` *number* assigned to a given person can change between runs (clusters are
+renumbered by their smallest `VIDEO`). To keep a person's number fixed forever, add
+`--stable-signers` (with `--batch`). It maintains a persistent **signer registry**
+(`Dataset/final_dataset/signer_registry.json`, git-ignored) holding one representative embedding
+(centroid) per signer:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m qipedc2vsl400.convert --batch --stable-signers
+```
+
+Each run, every clip is matched to the nearest registered signer centroid: within
+`--signer-threshold` → it keeps that existing `signer_id` (and updates the centroid); otherwise a new
+number is appended. So a new clip of a previously-seen person always lands on that person's existing
+number — even if their earlier videos were deleted — and existing numbers never change.
+
+How clustering compares people: each clip is reduced to a 128-D **face embedding** (OpenCV SFace);
+two clips are "the same signer" when their embeddings are close in **cosine distance**. These
+embeddings are exactly what the clip store / registry persist.
+
+Trade-offs:
+
+- Assignment is order-dependent (online), not a global optimum.
+- It never *merges* two already-registered signer ids even if later evidence shows they are the same
+  person. Run `--recluster` (with `--batch --stable-signers`) to re-cluster the whole store globally
+  and re-seed the registry when you want to fix that (numbers may change on that run).
 
 ### 4. Outputs
 

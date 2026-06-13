@@ -11,6 +11,7 @@ Dataset/labels/vsl400/*.zip
 Dataset/final_dataset/embeddings.npz
 Dataset/final_dataset/clip_store.json
 Dataset/final_dataset/clip_store_embeddings.npz
+Dataset/final_dataset/signer_registry.json
 
 # Python bytecode
 __pycache__/

@@ -55,6 +55,7 @@ from .signer_extractor import (
     extract_signers,
     write_signers_csv,
 )
+from .signer_registry import SignerRegistry
 from .verifier import VerifyReport, verify
 from .video_organizer import organize_by_signer
 from .video_probe import probe as default_probe
@@ -399,6 +400,8 @@ def run_batch(
     probe_fn: Callable[[Path], Any] | None = None,
     embed_fn: Callable[[Path | None, Any], Any] | None = None,
     prune_missing: bool = False,
+    stable_signers: bool = False,
+    recluster: bool = False,
 ) -> PipelineResult:
     """Run one **batch** of the conversion, accumulating into a persistent store.
 
@@ -424,6 +427,12 @@ def run_batch(
         prune_missing: When ``True``, drop store clips whose ``video_id`` is not
             in the **current** batch's label rows. Use only when the label file
             lists the full intended dataset (otherwise older batches are dropped).
+        stable_signers: When ``True``, keep ``signer_id`` stable across runs via a
+            persistent signer registry (a person matched to an existing signer
+            keeps that number; only genuinely new people get new numbers).
+        recluster: When ``True`` (with *stable_signers*), re-cluster the whole
+            store globally and re-seed the registry (re-numbering may occur). Use
+            to merge signers that should be one, or to reset numbering.
 
     Returns:
         A :class:`PipelineResult` over the full accumulated store.
@@ -503,7 +512,27 @@ def run_batch(
         # Cluster over the FULL store (old + new), keyed/ordered by video_id.
         ids = store.ordered_ids()
         embeddings = [store.embeddings.get(vid) for vid in ids]
-        per_clip = assign_signers(ids, embeddings, cfg)
+        if stable_signers:
+            registry = SignerRegistry.load(cfg.signer_registry_path)
+            if recluster or registry.is_empty():
+                # Seed (or re-seed) the registry from a global clustering.
+                per_clip = assign_signers(ids, embeddings, cfg)
+                registry.rebuild_from(ids, embeddings, per_clip, cfg)
+                logger.info(
+                    "Stable signers: %s registry from global clustering (%d signers)",
+                    "rebuilt" if recluster else "seeded",
+                    len({s for s, _c, _d, hf in per_clip if hf}),
+                )
+            else:
+                # Incremental: keep existing numbers, append only new people.
+                per_clip = registry.assign_all(ids, embeddings, cfg)
+                logger.info(
+                    "Stable signers: incremental assignment against %d known signers",
+                    len(registry.centroids),
+                )
+            registry.save(cfg.signer_registry_path)
+        else:
+            per_clip = assign_signers(ids, embeddings, cfg)
 
         records: list[OutputRecord] = []
         signer_assignments: list[SignerAssignment] = []
@@ -642,6 +671,22 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         ),
     )
     parser.add_argument(
+        "--stable-signers",
+        action="store_true",
+        help=(
+            "In --batch mode, keep signer_id stable across runs via a persistent "
+            "signer registry (matched people keep their number; new people append)."
+        ),
+    )
+    parser.add_argument(
+        "--recluster",
+        action="store_true",
+        help=(
+            "With --batch --stable-signers, re-cluster the whole store globally "
+            "and re-seed the registry (signer numbers may change)."
+        ),
+    )
+    parser.add_argument(
         "--copy-mode",
         choices=["hardlink", "copy"],
         default=None,
@@ -698,7 +743,12 @@ def main(argv: list[str] | None = None) -> int:
     cfg = _config_from_args(args)
 
     if args.batch:
-        result = run_batch(cfg, prune_missing=args.prune_missing)
+        result = run_batch(
+            cfg,
+            prune_missing=args.prune_missing,
+            stable_signers=args.stable_signers,
+            recluster=args.recluster,
+        )
     else:
         result = run_pipeline(
             cfg,

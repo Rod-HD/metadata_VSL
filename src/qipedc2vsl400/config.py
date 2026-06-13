@@ -58,6 +58,7 @@ class Config:
     # --- batch / incremental clip store (accumulates across batches) ---
     clip_store_json: str = "clip_store.json"  # per-clip records + props (human-readable)
     clip_store_embeddings: str = "clip_store_embeddings.npz"  # per-clip embeddings (binary)
+    signer_registry_json: str = "signer_registry.json"  # stable signer_id registry (centroids)
 
     # --- per-signer foldering (Req 9) ---
     by_signer_dir: str = "Dataset/by_signer"
@@ -130,6 +131,11 @@ class Config:
     def clip_store_embeddings_path(self) -> Path:
         """Absolute path to the batch clip-store embeddings (binary ``.npz``)."""
         return self.output_path / self.clip_store_embeddings
+
+    @property
+    def signer_registry_path(self) -> Path:
+        """Absolute path to the stable signer-id registry JSON (under output dir)."""
+        return self.output_path / self.signer_registry_json
 
     def video_search_paths(self) -> tuple[Path, ...]:
         """Absolute paths of every configured video search directory."""
