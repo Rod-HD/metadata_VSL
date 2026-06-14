@@ -158,6 +158,21 @@ def run_preprocess(
             else:
                 manual_review_ids.add(clip.video_id)
 
+    # --- Bước 5b: gom video cần rà soát thủ công vào folder riêng ---
+    # Hợp nhất mọi nguồn manual_review: segmenter không phân loại được
+    # (kind == "manual_review") + xung đột tên + clip < 1 frame (đã thêm ở trên).
+    for seg in seg_results:
+        if seg.kind == "manual_review":
+            manual_review_ids.add(seg.video_id)
+    if not dry_run and manual_review_ids:
+        copied = _copy_manual_review(manual_review_ids, discovered_ids, cfg, log)
+        log.info(
+            "Đã copy %d/%d video manual_review vào %s",
+            copied,
+            len(manual_review_ids),
+            cfg.manual_review_path,
+        )
+
     # --- Bước 6: dựng + ghi bảng nhãn mới (Req 7) ---
     if not dry_run:
         source_rows = read_source_labels(cfg)
@@ -178,6 +193,53 @@ def run_preprocess(
         report.manual_review,
     )
     return report
+
+
+def _copy_manual_review(manual_review_ids, discovered_ids, cfg, log) -> int:
+    """Copy file gốc của mỗi video manual_review vào ``cfg.manual_review_path``.
+
+    File được **copy** (không move/hardlink) để giữ nguyên video nguồn và để
+    folder manual_review tự chứa, dễ mở xem lại. Thư mục được tạo nếu thiếu. Lỗi
+    copy từng file được ghi log và bỏ qua (không làm hỏng cả lần chạy); chỉ video
+    đã thực sự duyệt được (có trong ``discovered_ids``) mới copy được.
+
+    Args:
+        manual_review_ids: Tập ``video_id`` cần rà soát thủ công (mọi nguồn).
+        discovered_ids: Mapping ``video_id -> VideoEntry`` (để lấy đường dẫn gốc).
+        cfg: :class:`~qipedc_video_preprocess.config.PreprocessConfig`.
+        log: Logger của lần chạy.
+
+    Returns:
+        Số file đã copy thành công.
+    """
+    import shutil
+
+    dest_dir = cfg.manual_review_path
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.error("Không tạo được thư mục manual_review %s: %s", dest_dir, exc)
+        return 0
+
+    copied = 0
+    for video_id in sorted(manual_review_ids):
+        entry = discovered_ids.get(video_id)
+        if entry is None:
+            # Video không nằm trong tập đã duyệt (vd bị loại từ discovery) → bỏ qua.
+            log.warning(
+                "manual_review: không tìm thấy video gốc cho video_id=%s — bỏ qua copy.",
+                video_id,
+            )
+            continue
+        dest = dest_dir / f"{video_id}.mp4"
+        try:
+            shutil.copy2(entry.path, dest)
+            copied += 1
+        except OSError as exc:
+            log.error(
+                "manual_review: lỗi copy %s -> %s: %s", entry.path, dest, exc
+            )
+    return copied
 
 
 def _clip_span(clip, seg, props, cfg):

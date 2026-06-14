@@ -50,6 +50,9 @@ class PreprocessConfig:
     split_output_dir: str = "Dataset/processed_videos/split_variants"
     new_labels_path: str = "Dataset/processed_videos/split_variants/labels_split.xlsx"
     log_dir: str = "Dataset/logs"
+    # Thư mục gom video cần rà soát thủ công (segmenter không phân loại được,
+    # xung đột tên, hoặc clip < 1 frame). File gốc được COPY vào đây để xem lại.
+    manual_review_dir: str = "Dataset/processed_videos/manual_review"
 
     # --- OCR / ROI (Req 3.1, 3.6) ---
     # ROI góc trên trái theo tỉ lệ (x0, y0, x1, y1), mỗi giá trị trong [0.0, 1.0].
@@ -98,6 +101,10 @@ class PreprocessConfig:
     @property
     def log_path(self) -> Path:
         return self.resolve(self.log_dir)
+
+    @property
+    def manual_review_path(self) -> Path:
+        return self.resolve(self.manual_review_dir)
 
     @property
     def ocr_models_path(self) -> Path:
@@ -149,6 +156,7 @@ class PreprocessConfig:
             ("split_output_dir", self.split_output_dir),
             ("new_labels_path", self.new_labels_path),
             ("log_dir", self.log_dir),
+            ("manual_review_dir", self.manual_review_dir),
         )
         for field_name, raw_value in output_fields:
             errors.extend(self._validate_output_path(field_name, raw_value, root))

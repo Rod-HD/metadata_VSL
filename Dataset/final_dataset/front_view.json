@@ -108,6 +108,30 @@
     "length_seconds": 3.9
   },
   {
+    "video_id": "D0024N_c1",
+    "gloss": "tham ăn",
+    "region": "Nam",
+    "topic": "Tính từ",
+    "id": "33",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 79,
+    "length_seconds": 2.63
+  },
+  {
+    "video_id": "D0024N_c2",
+    "gloss": "tham ăn",
+    "region": "Nam",
+    "topic": "Tính từ",
+    "id": "33",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 98,
+    "length_seconds": 3.27
+  },
+  {
     "video_id": "D0031N",
     "gloss": "không nghe lời",
     "region": "Nam",
@@ -900,6 +924,30 @@
     "length_seconds": 3.2
   },
   {
+    "video_id": "D0212_c1",
+    "gloss": "đèn ông sao",
+    "region": "Chung",
+    "topic": "Đồ vật",
+    "id": "347",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 128,
+    "length_seconds": 4.27
+  },
+  {
+    "video_id": "D0212_c2",
+    "gloss": "đèn ông sao",
+    "region": "Chung",
+    "topic": "Đồ vật",
+    "id": "347",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 108,
+    "length_seconds": 3.6
+  },
+  {
     "video_id": "D0218",
     "gloss": "bắn cung tên",
     "region": "Chung",
@@ -970,6 +1018,42 @@
     "resolution": 720,
     "num_frames": 126,
     "length_seconds": 4.2
+  },
+  {
+    "video_id": "D0232_c1",
+    "gloss": "yêu nước Việt Nam",
+    "region": "Chung",
+    "topic": "Hành động",
+    "id": "370",
+    "signer_id": "001",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 98,
+    "length_seconds": 3.27
+  },
+  {
+    "video_id": "D0232_c2",
+    "gloss": "yêu nước Việt Nam",
+    "region": "Chung",
+    "topic": "Hành động",
+    "id": "370",
+    "signer_id": "001",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 113,
+    "length_seconds": 3.77
+  },
+  {
+    "video_id": "D0232_c3",
+    "gloss": "yêu nước Việt Nam",
+    "region": "Chung",
+    "topic": "Hành động",
+    "id": "370",
+    "signer_id": "001",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 97,
+    "length_seconds": 3.23
   },
   {
     "video_id": "D0234",
