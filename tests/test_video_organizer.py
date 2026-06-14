@@ -38,7 +38,6 @@ def _record(video_id: str, signer_id: str) -> OutputRecord:
         gloss="x",
         region=None,
         topic=None,
-        stt=None,
         id=None,
         signer_id=signer_id,
         fps=25.0,

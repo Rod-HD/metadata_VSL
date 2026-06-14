@@ -3,7 +3,7 @@
 This module turns each validated :class:`~qipedc2vsl400.qipedc_reader.QipedcRow`
 into one :class:`OutputRecord` — a **superset** metadata object that keeps the
 QIPEDC-native fields (``video_id`` from ``VIDEO`` unchanged, ``gloss`` renamed
-from the already-normalized ``LABEL``, plus ``region``/``topic``/``stt``/``id``)
+from the already-normalized ``LABEL``, plus ``region``/``topic``/``id``)
 and adds the VSL400-derived fields (``signer_id`` from the signer-extraction
 step, and ``fps``/``resolution``/``num_frames``/``length_seconds`` measured from
 the real video clip).
@@ -44,7 +44,6 @@ class OutputRecord:
             Vietnamese text preserved.
         region: QIPEDC ``REGION`` copied as-is (may be ``None``).
         topic: QIPEDC ``TOPIC`` copied as-is (may be ``None``).
-        stt: QIPEDC ``STT`` copied as-is (may be ``None``).
         id: QIPEDC ``ID`` copied as-is (may be ``None``).
         signer_id: From the matching ``SignerAssignment`` (3-digit or the
             ``unknown`` bucket label).
@@ -59,7 +58,6 @@ class OutputRecord:
     gloss: str
     region: str | None
     topic: str | None
-    stt: str | None
     id: str | None
     # added (VSL400-derived)
     signer_id: str
@@ -149,7 +147,7 @@ def build_records(
     * ``video_id`` = QIPEDC ``VIDEO`` stem (or kept with extension when
       ``cfg.video_id_keep_extension``);
     * ``gloss`` = the already-normalized ``LABEL`` (kept as-is, UTF-8 preserved);
-    * ``region``/``topic``/``stt``/``id`` are copied from the row as-is;
+    * ``region``/``topic``/``id`` are copied from the row as-is;
     * ``signer_id`` is looked up from *signer_assignments* by ``VIDEO`` filename
       (falling back to ``cfg.signer_unknown_label`` if absent);
     * ``fps``/``resolution``/``num_frames``/``length_seconds`` come from
@@ -217,7 +215,6 @@ def build_records(
                     gloss=row.label,
                     region=row.region,
                     topic=row.topic,
-                    stt=row.stt,
                     id=row.id,
                     signer_id=signer_id,
                     fps=props.fps,

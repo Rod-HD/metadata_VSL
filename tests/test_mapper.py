@@ -47,7 +47,6 @@ SUPERSET_KEYS = {
     "gloss",
     "region",
     "topic",
-    "stt",
     "id",
     "signer_id",
     "fps",
@@ -289,7 +288,7 @@ def test_property2_schema_conformance(specs, tmp_path):
         assert isinstance(rec.gloss, str) and len(rec.gloss) > 0
 
         # QIPEDC-only fields are present (attributes exist); may be None.
-        for field in ("region", "topic", "stt", "id"):
+        for field in ("region", "topic", "id"):
             assert hasattr(rec, field)
             value = getattr(rec, field)
             assert value is None or isinstance(value, str)

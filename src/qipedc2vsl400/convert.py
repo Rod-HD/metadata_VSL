@@ -545,7 +545,6 @@ def run_batch(
                     gloss=entry.gloss,
                     region=entry.region,
                     topic=entry.topic,
-                    stt=entry.stt,
                     id=entry.id,
                     signer_id=signer_id,
                     fps=entry.fps,

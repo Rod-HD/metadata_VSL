@@ -41,7 +41,6 @@ SUPERSET_FIELDS: tuple[str, ...] = (
     "gloss",
     "region",
     "topic",
-    "stt",
     "id",
     "signer_id",
     "fps",
@@ -51,7 +50,7 @@ SUPERSET_FIELDS: tuple[str, ...] = (
 )
 
 # The QIPEDC-native optional fields (kept; may be ``None``).
-_OPTIONAL_STR_FIELDS: tuple[str, ...] = ("region", "topic", "stt", "id")
+_OPTIONAL_STR_FIELDS: tuple[str, ...] = ("region", "topic", "id")
 
 # Fields added from the VSL400 reference; the only ones compared against a real
 # VSL400 sample (reference check, not strict equality).
