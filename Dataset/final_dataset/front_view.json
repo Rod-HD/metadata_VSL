@@ -348,7 +348,7 @@
     "length_seconds": 3.37
   },
   {
-    "video_id": "D0105",
+    "video_id": "D0105_c1",
     "gloss": "xoa đầu",
     "region": "Chung",
     "topic": "Bản thân",
@@ -356,8 +356,20 @@
     "signer_id": "001",
     "fps": 30.0,
     "resolution": 720,
-    "num_frames": 186,
-    "length_seconds": 6.2
+    "num_frames": 104,
+    "length_seconds": 3.47
+  },
+  {
+    "video_id": "D0105_c2",
+    "gloss": "xoa đầu",
+    "region": "Chung",
+    "topic": "Bản thân",
+    "id": "172",
+    "signer_id": "001",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 76,
+    "length_seconds": 2.53
   },
   {
     "video_id": "D0116",
@@ -372,7 +384,7 @@
     "length_seconds": 4.93
   },
   {
-    "video_id": "D0117",
+    "video_id": "D0117_c1",
     "gloss": "tinh mắt",
     "region": "Chung",
     "topic": "Bản thân",
@@ -380,8 +392,32 @@
     "signer_id": "002",
     "fps": 30.0,
     "resolution": 720,
-    "num_frames": 331,
-    "length_seconds": 11.03
+    "num_frames": 139,
+    "length_seconds": 4.63
+  },
+  {
+    "video_id": "D0117_c2",
+    "gloss": "tinh mắt",
+    "region": "Chung",
+    "topic": "Bản thân",
+    "id": "188",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 82,
+    "length_seconds": 2.73
+  },
+  {
+    "video_id": "D0117_c3",
+    "gloss": "tinh mắt",
+    "region": "Chung",
+    "topic": "Bản thân",
+    "id": "188",
+    "signer_id": "002",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 98,
+    "length_seconds": 3.27
   },
   {
     "video_id": "D0125",
