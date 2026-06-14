@@ -2,11 +2,16 @@
 .venv/
 .pip-cache/
 
-# Large media and generated artifacts (never committed)
-Dataset/processed_videos/
+# Large media and generated artifacts (never committed).
+# NOTE: ignore the *contents* of processed_videos with /* (not the dir itself),
+# so the split_variants/ subtree below can be re-included as a tracked deliverable.
+Dataset/processed_videos/*
 Dataset/raw_videos/
 Dataset/by_signer/
 Dataset/models/
+
+# Exception: keep the multi-variant splitter output (small sub-clips + labels).
+!Dataset/processed_videos/split_variants/
 Dataset/labels/vsl400/*.zip
 Dataset/final_dataset/embeddings.npz
 Dataset/final_dataset/clip_store.json

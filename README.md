@@ -13,11 +13,13 @@ folders for manual verification.
 ## Project layout
 
 ```
-src/qipedc2vsl400/      # pipeline package (reader, probe, signer extractor, mapper, writer, ...)
-tests/                  # unit + property-based (Hypothesis) tests
-scripts/                # helper / verification scripts
-Dataset/final_dataset/  # output: front_view.json, signers.csv (tracked)
-Dataset/labels/         # source QIPEDC labels (*.xlsx, tracked)
+src/qipedc2vsl400/                       # metadata conversion pipeline (reader, probe, signer, mapper, writer, ...)
+src/qipedc_video_preprocess/             # multi-variant video splitting stage (independent)
+tests/                                   # unit + property-based (Hypothesis) tests
+scripts/                                 # helper / verification scripts
+Dataset/final_dataset/                   # output: front_view.json, signers.csv (tracked)
+Dataset/labels/                          # source QIPEDC labels (*.xlsx, tracked)
+Dataset/processed_videos/split_variants/ # split sub-clips + labels_split.xlsx (output of the splitter)
 ```
 
 Large media (`Dataset/raw_videos/`, `Dataset/processed_videos/`, `Dataset/by_signer/`),
@@ -219,6 +221,76 @@ Open each `Dataset/by_signer/signer_XXX/` folder to manually verify that the ext
 correct. If a real signer was split into two folders (or two signers merged into one), re-run with a
 tuned `--signer-threshold` (raise it to merge more, lower it to split more).
 
+## Multi-variant video splitting (`qipedc_video_preprocess`)
+
+Some QIPEDC clips pack **2–3 sign variants ("cách")** of the *same* gloss into one `.mp4`. A small
+number in the **top-left corner** ("CÁCH 1", "CÁCH 2", …) marks each variant. Extracting keypoints
+from such a clip would mix several variants into one training sample. The independent preprocessing
+stage in `src/qipedc_video_preprocess/` detects that number via OCR, splits multi-variant clips into
+one sub-clip per variant, and writes a reconciled label spreadsheet — without touching the
+`qipedc2vsl400` pipeline or the source labels.
+
+It is fully separate from the metadata conversion above: its own package, its own config, its own
+outputs under `Dataset/processed_videos/split_variants/`.
+
+### How it works
+
+```
+validate config (must be on D:) → discover *.mp4 → per video:
+  sample frames (~1/s) → OCR top-left ROI for the "CÁCH" digit → classify
+    no digit          → single variant (kept as-is, original name)
+    digits 1,2,…,N    → multi variant  → cut into <id>_c1.mp4 … <id>_cN.mp4
+→ write split_variants/labels_split.xlsx → log run + RunReport
+```
+
+A safety margin of frames is dropped around each internal boundary so no transition frame leaks
+between two sub-clips. Sub-clips keep the source `fps` and resolution exactly. Re-running on the same
+inputs is idempotent (same filenames, same labels; existing files are overwritten in place).
+
+### Run it (manual, from the project root)
+
+The stage runs as a module. Add `src` to `PYTHONPATH` and use the venv interpreter:
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m qipedc_video_preprocess.preprocess
+```
+
+By default it scans `Dataset/processed_videos/resize_720p/` (preferred) then `Dataset/raw_videos/`,
+reads source labels from `Dataset/labels/*.xlsx`, and writes to
+`Dataset/processed_videos/split_variants/`. On the **first** run EasyOCR downloads its detection +
+recognition weights (~64 MB) into `Dataset/models/easyocr/` (on `D:`, never on `C:`).
+
+CLI flags:
+
+| Flag | Purpose |
+| --- | --- |
+| `--project-root <path>` | Override the project root (defaults to the current directory). |
+| `--sample-interval <sec>` | Frame sampling interval, `0.1`–`5.0` (default `1.0`). |
+| `--safety-margin <frames>` | Frames trimmed each side of an internal boundary, `0`–`60` (default `3`). |
+| `--ocr-threshold <float>` | Minimum OCR confidence to accept a digit, `0.0`–`1.0` (default `0.5`). |
+| `--dry-run` | Discover + classify only; do not write clips or labels. |
+
+### Outputs
+
+```
+Dataset/processed_videos/split_variants/<id>.mp4            # single-variant clips (kept as-is)
+Dataset/processed_videos/split_variants/<id>_c1.mp4 …       # one sub-clip per variant of a multi clip
+Dataset/processed_videos/split_variants/labels_split.xlsx  # reconciled labels (STT renumbered 1..M)
+Dataset/logs/preprocess_<timestamp>.log                    # run log + RunReport summary
+```
+
+### Calibrating the OCR ROI (important)
+
+The "CÁCH" number sits **just right of the QIPEDC logo** in the top-left corner. The ROI that
+isolates it is config-driven (`roi_top_left`, proportional `0.0`–`1.0` coordinates). The default
+`(0.19, 0.05, 0.25, 0.22)` was calibrated on 1280×720 clips: it skips the logo and the "H" of
+"CÁCH" so the OCR reads a clean single digit. A ROI that is too wide (covering the logo) makes
+EasyOCR read noise (e.g. two-digit strings), which the detector rejects, so **every clip would be
+misclassified as single-variant**. If your clips have a different layout, dump a couple of frames,
+inspect the top-left corner, and adjust `roi_top_left` in `src/qipedc_video_preprocess/config.py`
+(or build a `PreprocessConfig` with an overridden ROI in a small runner script).
+
 ## Test
 
 ```powershell
@@ -228,7 +300,7 @@ python -m pytest
 ## Requirements
 
 See `requirements.txt` for pinned dependencies (`openpyxl`, `opencv-python-headless`, `numpy`,
-`scikit-learn`, `requests`, `pytest`, `hypothesis`).
+`scikit-learn`, `easyocr`, `requests`, `pytest`, `hypothesis`).
 
 ---
 
@@ -393,3 +465,50 @@ echo $LASTEXITCODE                       # 0 = verify đạt
 Get-Content Dataset\by_signer\_summary.txt
 Get-ChildItem Dataset\final_dataset\
 ```
+
+---
+
+## Tách video nhiều cách (Tiếng Việt) — `qipedc_video_preprocess`
+
+Một số video QIPEDC gộp **2–3 cách biểu diễn** của **cùng một từ** vào một file. Con số ở **góc trên
+bên trái** ("CÁCH 1", "CÁCH 2", …) đánh dấu từng cách. Công đoạn này tự phát hiện con số bằng OCR,
+cắt video nhiều cách thành nhiều video con (mỗi cách một file), và xuất bảng nhãn mới — **không** đụng
+pipeline `qipedc2vsl400` và **không** ghi đè bảng nhãn nguồn.
+
+### Chạy (thủ công, từ thư mục gốc project)
+
+```powershell
+$env:PYTHONPATH = "src"
+.\.venv\Scripts\python.exe -m qipedc_video_preprocess.preprocess
+```
+
+Mặc định: duyệt `Dataset\processed_videos\resize_720p\` (ưu tiên) rồi `Dataset\raw_videos\`, đọc nhãn
+từ `Dataset\labels\*.xlsx`, ghi ra `Dataset\processed_videos\split_variants\`. Lần đầu EasyOCR tự tải
+trọng số (~64 MB) về `Dataset\models\easyocr\` (trên `D:`, không lên `C:`).
+
+| Flag | Ý nghĩa |
+| --- | --- |
+| `--project-root <path>` | Đổi thư mục gốc (mặc định: thư mục hiện tại). |
+| `--sample-interval <giây>` | Khoảng lấy mẫu frame, `0.1`–`5.0` (mặc định `1.0`). |
+| `--safety-margin <frame>` | Số frame bỏ mỗi phía ranh giới, `0`–`60` (mặc định `3`). |
+| `--ocr-threshold <float>` | Ngưỡng tin cậy OCR tối thiểu, `0.0`–`1.0` (mặc định `0.5`). |
+| `--dry-run` | Chỉ duyệt + phân loại, không ghi clip/nhãn. |
+
+### Kết quả
+
+```
+Dataset\processed_videos\split_variants\<id>.mp4            # video một cách (giữ nguyên tên)
+Dataset\processed_videos\split_variants\<id>_c1.mp4 …       # mỗi cách một video con
+Dataset\processed_videos\split_variants\labels_split.xlsx  # bảng nhãn mới (STT đánh lại 1..M)
+Dataset\logs\preprocess_<timestamp>.log                    # log + RunReport
+```
+
+### Hiệu chỉnh ROI con số (quan trọng)
+
+Con số "CÁCH" nằm **ngay bên phải logo QIPEDC** ở góc trên trái. Vùng ROI để OCR đọc số là
+config-driven (`roi_top_left`, tọa độ tỉ lệ `0.0`–`1.0`). Mặc định `(0.19, 0.05, 0.25, 0.22)` đã
+hiệu chỉnh thực nghiệm trên video 1280×720: cô lập đúng con số, bỏ logo và chữ "H" của "CÁCH". ROI
+quá rộng (ôm cả logo) khiến OCR đọc nhiễu (chuỗi 2 chữ số) → bị loại → **mọi video bị phân loại nhầm
+thành một cách**. Nếu bố cục video khác, dump vài frame, xem góc trên trái, rồi chỉnh `roi_top_left`
+trong `src\qipedc_video_preprocess\config.py` (hoặc tạo `PreprocessConfig` ghi đè ROI trong một script
+runner nhỏ).

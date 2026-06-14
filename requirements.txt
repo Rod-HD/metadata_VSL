@@ -8,3 +8,8 @@ scikit-learn==1.5.2
 requests==2.32.3
 pytest==8.3.3
 hypothesis==6.115.5
+
+# multi-variant-video-splitting: OCR con số "CÁCH" ở ROI góc trên trái.
+# EasyOCR mang theo trọng số riêng -> không cần cài binary Tesseract lên C:.
+# Trọng số tải về Dataset/models/easyocr/ trên D: (xem setup_env.ps1).
+easyocr==1.7.2
