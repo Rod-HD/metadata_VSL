@@ -1,0 +1,33 @@
+{
+  "doi": "10.5281/zenodo.17943574",
+  "record_id": "17943574",
+  "record_url": "https://zenodo.org/records/17943574",
+  "api_url": "https://zenodo.org/api/records/17943574",
+  "retrieved_at": "2026-06-13T19:34:49.944991+00:00",
+  "allowed_keys": [
+    "README.txt",
+    "VietnameseSignLanguageRecognition.zip",
+    "merge_splits.py"
+  ],
+  "excluded": "Part_*.zip (video archives) — never downloaded",
+  "files": [
+    {
+      "key": "README.txt",
+      "url": "https://zenodo.org/api/records/17943574/files/README.txt/content",
+      "md5": "7f1171662cd0d21b845db9077d056c47",
+      "expected_md5": "7f1171662cd0d21b845db9077d056c47"
+    },
+    {
+      "key": "VietnameseSignLanguageRecognition.zip",
+      "url": "https://zenodo.org/api/records/17943574/files/VietnameseSignLanguageRecognition.zip/content",
+      "md5": "c10027c910a043c33bff3522dec02cd5",
+      "expected_md5": "c10027c910a043c33bff3522dec02cd5"
+    },
+    {
+      "key": "merge_splits.py",
+      "url": "https://zenodo.org/api/records/17943574/files/merge_splits.py/content",
+      "md5": "c6176e97113ed196f247d2eb6dc4f5c3",
+      "expected_md5": "c6176e97113ed196f247d2eb6dc4f5c3"
+    }
+  ]
+}

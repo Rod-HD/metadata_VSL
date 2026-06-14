@@ -277,6 +277,7 @@ CLI flags:
 Dataset/processed_videos/split_variants/<id>.mp4            # single-variant clips (kept as-is)
 Dataset/processed_videos/split_variants/<id>_c1.mp4 …       # one sub-clip per variant of a multi clip
 Dataset/processed_videos/split_variants/labels_split.xlsx  # reconciled labels (STT renumbered 1..M)
+Dataset/processed_videos/manual_review/<id>.mp4             # copies of clips that need manual checking
 Dataset/logs/preprocess_<timestamp>.log                    # run log + RunReport summary
 ```
 
@@ -500,6 +501,7 @@ trọng số (~64 MB) về `Dataset\models\easyocr\` (trên `D:`, không lên `C
 Dataset\processed_videos\split_variants\<id>.mp4            # video một cách (giữ nguyên tên)
 Dataset\processed_videos\split_variants\<id>_c1.mp4 …       # mỗi cách một video con
 Dataset\processed_videos\split_variants\labels_split.xlsx  # bảng nhãn mới (STT đánh lại 1..M)
+Dataset\processed_videos\manual_review\<id>.mp4             # bản copy video cần kiểm tra thủ công
 Dataset\logs\preprocess_<timestamp>.log                    # log + RunReport
 ```
 
