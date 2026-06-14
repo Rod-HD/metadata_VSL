@@ -10,8 +10,10 @@ Dataset/raw_videos/
 Dataset/by_signer/
 Dataset/models/
 
-# Exception: keep the multi-variant splitter output (small sub-clips + labels).
+# Exception: keep the multi-variant splitter LABELS as a tracked deliverable, but
+# not the clip .mp4s themselves (a full 1000-video run is ~634 MB of binaries).
 !Dataset/processed_videos/split_variants/
+Dataset/processed_videos/split_variants/*.mp4
 Dataset/labels/vsl400/*.zip
 Dataset/final_dataset/embeddings.npz
 Dataset/final_dataset/clip_store.json
@@ -27,9 +29,10 @@ __pycache__/
 .vscode/
 .idea/
 
-# Local-only personal guide / scratch runner (never committed)
+# Local-only personal guide / scratch runners (never committed)
 HUONG_DAN_CHI_TIET.md
 run_custom.py
+run_*.py
 
 # Tooling caches (kept on D:, never committed)
 .pytest_cache/
