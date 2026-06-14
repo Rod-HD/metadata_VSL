@@ -179,12 +179,17 @@ class EasyOcrNumberDetector:
     module khác không phụ thuộc ``torch``.
     """
 
+    # ROI rộng bao trùm logo + "CÁCH" + số phía sau — dùng cho fallback khi
+    # primary ROI không tìm được số (ví dụ logo lệch phải).
+    _DEFAULT_WIDE_ROI: tuple[float, float, float, float] = (0.05, 0.03, 0.45, 0.28)
+
     def __init__(
         self,
         cfg=None,
         *,
         models_dir: str | os.PathLike | None = None,
         roi: tuple[float, float, float, float] | None = None,
+        wide_roi: tuple[float, float, float, float] | None = None,
         confidence_threshold: float | None = None,
         languages: Iterable[str] = ("en",),
         gpu: bool = False,
@@ -198,7 +203,9 @@ class EasyOcrNumberDetector:
                 tin cậy (``ocr_confidence_threshold``).
             models_dir: Ghi đè thư mục lưu trọng số EasyOCR. Bắt buộc phải có
                 hoặc qua ``cfg`` hoặc qua tham số này để trọng số nằm trên ``D:``.
-            roi: Ghi đè ROI tỉ lệ ``(x0, y0, x1, y1)``.
+            roi: Ghi đè ROI tỉ lệ ``(x0, y0, x1, y1)`` cho bước primary.
+            wide_roi: ROI rộng cho fallback ``find_number_near_cach``; mặc định
+                ``_DEFAULT_WIDE_ROI`` bao trùm logo + "CÁCH" + số.
             confidence_threshold: Ghi đè ngưỡng tin cậy.
             languages: Danh sách ngôn ngữ cho EasyOCR (mặc định ``("en",)``).
             gpu: Có dùng GPU hay không (mặc định ``False``).
@@ -219,13 +226,15 @@ class EasyOcrNumberDetector:
             )
         self._models_dir = resolved_models
 
-        # --- ROI và ngưỡng tin cậy ---
+        # --- ROI, wide_roi và ngưỡng tin cậy ---
         if roi is not None:
             self._roi = roi
         elif cfg is not None:
             self._roi = cfg.roi_top_left
         else:
             self._roi = (0.0, 0.0, 0.22, 0.18)
+
+        self._wide_roi = wide_roi if wide_roi is not None else self._DEFAULT_WIDE_ROI
 
         if confidence_threshold is not None:
             self._threshold = float(confidence_threshold)
@@ -270,7 +279,15 @@ class EasyOcrNumberDetector:
     # API NumberDetector
     # ------------------------------------------------------------------ #
     def detect(self, frame) -> DetectionResult:
-        """Phát hiện con số "CÁCH" trên *frame* (Req 3.2/3.3/3.4)."""
+        """Phát hiện con số "CÁCH" trên *frame* (Req 3.2/3.3/3.4).
+
+        Thử hai bước:
+        1. **Primary**: OCR ROI cố định nhỏ (``self._roi``) với allowlist số —
+           nhanh, đủ cho phần lớn video layout chuẩn.
+        2. **Fallback**: nếu primary trả ``None``, gọi
+           :func:`find_number_near_cach` trên vùng rộng hơn để xử lý layout
+           lệch (logo shift sang phải khiến số nằm ngoài primary ROI).
+        """
         roi_img = crop_roi(frame, self._roi)
         if roi_img is None:
             self._log.debug(
@@ -283,22 +300,147 @@ class EasyOcrNumberDetector:
         results = reader.readtext(roi_img, allowlist="123456789")
 
         tokens = _tokens_from_easyocr(results)
-        number = interpret_ocr(tokens, self._threshold)
+        primary = interpret_ocr(tokens, self._threshold)
+
+        # Luôn chạy fallback để phát hiện layout lệch (logo shift phải khiến
+        # primary ROI bắt vào chữ "C"/"H" của "CÁCH" và đọc nhầm thành số).
+        fallback = find_number_near_cach(frame, self._wide_roi, reader)
+
+        # Chọn kết quả: ưu tiên fallback khi hai bên bất đồng — fallback đọc
+        # toàn bộ text nên biết chắc số nằm sau "CÁCH", còn primary đọc blind.
+        if primary is not None and fallback is not None and primary == fallback:
+            number = primary  # cả hai đồng thuận: tự tin nhất
+        elif fallback is not None:
+            # Fallback tìm được (dù primary có hay không): tin fallback vì nó
+            # neo vào chữ "CÁCH" thay vì crop mù.
+            if primary != fallback:
+                self._log.debug(
+                    "Primary=%s nhưng fallback=%d (neo vào 'CÁCH') — dùng fallback.",
+                    primary, fallback,
+                )
+            number = fallback
+        else:
+            number = primary  # chỉ primary có kết quả (hoặc cả hai None)
+
         if number is None:
             return DetectionResult(number=None, confidence=0.0)
 
-        # Lấy độ tin cậy của token chữ số hợp lệ tương ứng (có đúng một).
-        confidence = next(
-            (
-                float(conf)
-                for text, conf in tokens
-                if _as_single_digit(text) == number
-                and conf is not None
-                and float(conf) >= self._threshold
-            ),
-            0.0,
-        )
+        # Lấy độ tin cậy: dùng primary confidence nếu đồng thuận, ngưỡng nếu chỉ fallback.
+        if primary == number:
+            confidence = next(
+                (
+                    float(conf)
+                    for text, conf in tokens
+                    if _as_single_digit(text) == number
+                    and conf is not None
+                    and float(conf) >= self._threshold
+                ),
+                self._threshold,
+            )
+        else:
+            confidence = self._threshold
         return DetectionResult(number=number, confidence=confidence)
+
+
+def find_number_near_cach(
+    frame,
+    wide_roi: tuple[float, float, float, float],
+    reader,
+) -> int | None:
+    """Tìm số cách bằng cách OCR vùng rộng và định vị token số ngay sau "CÁCH".
+
+    Thay vì crop ROI cố định, hàm này:
+    1. OCR toàn bộ *wide_roi* (không allowlist) để lấy cả chữ lẫn số.
+    2. Tìm token có text chứa "CÁCH"/"CACH"/"BACH" (EasyOCR hay mất dấu).
+    3. Trả số từ token gộp ("CÁCH 1") hoặc token số ngay bên phải bbox "CÁCH".
+
+    Không lọc theo confidence — confidence thấp là bình thường khi OCR chữ có
+    dấu tiếng Việt bằng model English; điều quan trọng là vị trí tương đối.
+
+    Args:
+        frame: Mảng numpy (H, W, 3) từ OpenCV.
+        wide_roi: ROI tỉ lệ (x0, y0, x1, y1) bao trùm khu vực logo + chữ "CÁCH"
+            + số phía sau nó.
+        reader: ``easyocr.Reader`` đã khởi tạo.
+
+    Returns:
+        Con số ``int`` trong ``{1..9}`` nếu tìm được; ``None`` nếu không.
+    """
+    wide_img = crop_roi(frame, wide_roi)
+    if wide_img is None:
+        return None
+
+    # OCR không có allowlist để nhận cả chữ "CÁCH" lẫn số.
+    results = reader.readtext(wide_img)
+    if not results:
+        return None
+
+    # Phân tách bbox, text, confidence từ kết quả EasyOCR (detail=1).
+    parsed: list[tuple[list, str, float]] = []
+    for item in results:
+        try:
+            bbox, text, conf = item
+            parsed.append((bbox, str(text).strip(), float(conf)))
+        except (ValueError, TypeError):
+            continue
+
+    # --- Bước 1: tìm token chứa "CÁCH" (kể cả khi EasyOCR gộp "CÁCH 1" thành
+    # một token hoặc mất dấu thành "BACH"/"CACH"). ---
+    # Pattern nhận dạng (bỏ dấu, không phân biệt hoa/thường):
+    #   - token độc lập: "cach", "cách", "bach" (C → B khi mất dấu)
+    #   - token gộp với số: "cach 1", "bach 1", "cách1", v.v.
+    _CACH_VARIANTS = {"cach", "cách", "bach"}  # "bach" = "cách" bị mất dấu
+
+    def _contains_cach(text: str) -> bool:
+        t = text.lower().strip()
+        # Khớp chính xác hoặc bắt đầu bằng pattern + khoảng trắng/số.
+        for v in _CACH_VARIANTS:
+            if t == v or t.startswith(v + " ") or t.startswith(v + "\t"):
+                return True
+        return False
+
+    def _extract_trailing_digit(text: str) -> int | None:
+        """Lấy chữ số cuối token nếu EasyOCR gộp 'CÁCH 1' thành một text."""
+        parts = text.strip().split()
+        if len(parts) >= 2:
+            return _as_single_digit(parts[-1])
+        return None
+
+    for bbox, text, conf in parsed:
+        if not _contains_cach(text):
+            continue
+        # Trường hợp 1: token gộp "CÁCH 1" → lấy số cuối ngay.
+        digit = _extract_trailing_digit(text)
+        if digit is not None:
+            return digit
+
+        # Trường hợp 2: token "CÁCH" đứng riêng → tìm số token ngay bên phải.
+        try:
+            xs = [pt[0] for pt in bbox]
+            cach_x_center = sum(xs) / len(xs)
+            cach_width = max(xs) - min(xs)
+        except (TypeError, IndexError):
+            continue
+
+        best_num: int | None = None
+        best_dist = float("inf")
+        for bbox2, text2, conf2 in parsed:
+            digit2 = _as_single_digit(text2)
+            if digit2 is None:
+                continue
+            try:
+                num_xs = [pt[0] for pt in bbox2]
+                num_x_center = sum(num_xs) / len(num_xs)
+            except (TypeError, IndexError):
+                continue
+            dx = num_x_center - cach_x_center
+            if 0 < dx < 2.5 * max(cach_width, 10) and dx < best_dist:
+                best_dist = dx
+                best_num = digit2
+        if best_num is not None:
+            return best_num
+
+    return None
 
 
 def _tokens_from_easyocr(results: Iterable) -> list[tuple[str, float]]:
