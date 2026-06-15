@@ -114,6 +114,7 @@ def classify_sequence(
     samples: list[Sample],
     cfg: "PreprocessConfig",
     video_id: str = "",
+    saw_cach_flags: "list[bool] | None" = None,
 ) -> SegmentationResult:
     """Phân loại một video thành single / multi / manual_review (LOGIC THUẦN).
 
@@ -159,6 +160,12 @@ def classify_sequence(
     observed_numbers: tuple[int | None, ...] = tuple(num for _, num in samples)
     confirm = max(1, int(cfg.boundary_confirm_frames))
 
+    # Có frame nào nhìn thấy nhãn "CÁCH" không? Nếu video có overlay "CÁCH" mà ta
+    # KHÔNG dựng được phân đoạn multi hợp lệ thì đó là dấu hiệu nghi ngờ (số đọc
+    # không chắc) → phải rà soát thủ công thay vì lặng lẽ coi là một-cách (Req:
+    # không âm thầm bỏ sót video nhiều cách).
+    any_cach = bool(saw_cach_flags) and any(saw_cach_flags)
+
     # Không có frame mẫu nào → không có gì để phân loại; coi như single rỗng.
     if not samples:
         return SegmentationResult(
@@ -187,6 +194,17 @@ def classify_sequence(
 
     # Req 4.5: không có số hợp lệ nào → Video_Một_Cách.
     if not transitions:
+        # NGOẠI LỆ: nếu có frame thấy nhãn "CÁCH" mà không đọc nổi số nào, đây là
+        # video có overlay nhiều-cách nhưng OCR thất bại → rà soát thủ công, KHÔNG
+        # coi là một-cách (tránh cắt sót).
+        if any_cach:
+            return SegmentationResult(
+                video_id=video_id,
+                kind="manual_review",
+                variant_count=0,
+                spans=(),
+                observed_numbers=observed_numbers,
+            )
         return SegmentationResult(
             video_id=video_id,
             kind="single",
@@ -430,8 +448,10 @@ def segment_video(
             )
 
         samples: list[Sample] = []
+        saw_cach_flags: list[bool] = []
         for index in sample_indices:
             number: int | None = None
+            saw_cach = False
             try:
                 capture.set(cv2.CAP_PROP_POS_FRAMES, int(index))
                 grabbed, frame = capture.read()
@@ -448,7 +468,9 @@ def segment_video(
 
             if grabbed and frame is not None:
                 try:
-                    number = detector.detect(frame).number
+                    detection = detector.detect(frame)
+                    number = detection.number
+                    saw_cach = getattr(detection, "saw_cach", False)
                 except Exception as exc:  # noqa: BLE001 - Req 4.8
                     log.warning(
                         "segment_video[%s]: detector lỗi tại frame %d (%s: %s) -> "
@@ -460,8 +482,11 @@ def segment_video(
                     )
                     number = None
             samples.append((index, number))
+            saw_cach_flags.append(saw_cach)
 
-        result = classify_sequence(samples, cfg, video_id=entry.video_id)
+        result = classify_sequence(
+            samples, cfg, video_id=entry.video_id, saw_cach_flags=saw_cach_flags
+        )
 
         # Chỉ video nhiều cách mới có ranh giới nội bộ cần tinh chỉnh (Req 4.4).
         if result.kind != "multi" or len(result.spans) < 2:

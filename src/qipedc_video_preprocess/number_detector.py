@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional, Protocol, Sequence, runtime_checkable
@@ -26,6 +27,23 @@ logger = logging.getLogger(__name__)
 # Tập chữ số hợp lệ cho con số "CÁCH": 1..9 (không nhận 0). Dùng cho cả
 # ``interpret_ocr`` lẫn allowlist của EasyOCR.
 _VALID_DIGITS = frozenset("123456789")
+
+# Nhận dạng nhãn "CÁCH" do EasyOCR (model English) đọc lệch trên video QIPEDC.
+# Biến thể quan sát thực tế: "Cach", "Cacl", "Cack", "Bach" (C→B khi mất dấu);
+# đôi khi kèm số/khoảng trắng ngay sau ("Cach 2", "Cach2").
+#   * Nhánh "cac" + một ký tự chữ: bao "Cach/Cacl/Cack".
+#   * Nhánh "bach" tường minh: chỉ "Bach" (KHÔNG khớp từ tiếng Anh "back").
+# Chuẩn hóa bỏ dấu trước khi khớp để "Cách" (nếu lọt vào) cũng nhận được.
+_CACH_RE = re.compile(r"^(?:cac[a-z]|bach)(?:\b|\s|\d|$)", re.IGNORECASE)
+
+# Bảng bỏ dấu tối thiểu cho các nguyên âm có dấu của "cách".
+_DIACRITIC_MAP = str.maketrans("áàảãạăắằẳẵặâấầẩẫậ", "a" * 17)
+
+
+def _is_cach_token(text: str) -> bool:
+    """True nếu *text* trông như nhãn "CÁCH" (kể cả biến thể OCR mất dấu/có dấu)."""
+    normalized = str(text).strip().lower().translate(_DIACRITIC_MAP)
+    return bool(_CACH_RE.match(normalized))
 
 
 @dataclass(frozen=True)
@@ -37,10 +55,17 @@ class DetectionResult:
             khi không có số hợp lệ ("không có số").
         confidence: Độ tin cậy của kết quả OCR. Bằng ``0.0`` khi ``number`` là
             ``None``.
+        saw_cach: ``True`` nếu OCR vùng rộng nhìn thấy nhãn "CÁCH" (kể cả biến thể
+            mất dấu "Cacl"/"Cack"/"Bach") trên frame, **dù có đọc được con số hay
+            không**. Dùng để phân biệt "video không có overlay CÁCH" (single thật)
+            với "có overlay CÁCH nhưng số không đọc chắc" (cần rà soát thủ công —
+            tránh âm thầm bỏ sót video nhiều cách). Mặc định ``False`` để các nơi
+            dựng ``DetectionResult`` cũ không phải đổi.
     """
 
     number: int | None
     confidence: float
+    saw_cach: bool = False
 
 
 @runtime_checkable
@@ -179,9 +204,12 @@ class EasyOcrNumberDetector:
     module khác không phụ thuộc ``torch``.
     """
 
-    # ROI rộng bao trùm logo + "CÁCH" + số phía sau — dùng cho fallback khi
-    # primary ROI không tìm được số (ví dụ logo lệch phải).
-    _DEFAULT_WIDE_ROI: tuple[float, float, float, float] = (0.05, 0.03, 0.45, 0.28)
+    # ROI rộng = nguyên góc phần tư trên-bên-trái của khung hình. Bao trọn logo
+    # + chữ "CÁCH" + số dù layout lệch trái hay phải (logo QIPEDC luôn nằm trong
+    # góc trên trái). ROI hẹp hơn từng bỏ sót số ở các video mà logo lệch hoặc số
+    # đè lên logo ("con chim"/"con khỉ"/"con sông"). Vùng này không chạm tới chữ
+    # phụ đề/nhãn ở góc trên PHẢI nên không gây nhiễu.
+    _DEFAULT_WIDE_ROI: tuple[float, float, float, float] = (0.0, 0.0, 0.5, 0.5)
 
     def __init__(
         self,
@@ -284,16 +312,18 @@ class EasyOcrNumberDetector:
         Thử hai bước:
         1. **Primary**: OCR ROI cố định nhỏ (``self._roi``) với allowlist số —
            nhanh, đủ cho phần lớn video layout chuẩn.
-        2. **Fallback**: nếu primary trả ``None``, gọi
-           :func:`find_number_near_cach` trên vùng rộng hơn để xử lý layout
-           lệch (logo shift sang phải khiến số nằm ngoài primary ROI).
+        2. **Fallback**: luôn gọi :func:`find_number_near_cach` trên vùng rộng để
+           xử lý layout lệch (logo shift) hoặc số đè lên logo (nét mảnh). Fallback
+           cũng cho biết có nhìn thấy nhãn "CÁCH" hay không (``saw_cach``) — dùng
+           để đánh dấu frame "có CÁCH nhưng không đọc được số" thay vì lặng lẽ coi
+           là không có overlay.
         """
         roi_img = crop_roi(frame, self._roi)
         if roi_img is None:
             self._log.debug(
                 "Frame rỗng hoặc ROI diện tích 0 — trả 'không có số'."
             )
-            return DetectionResult(number=None, confidence=0.0)
+            return DetectionResult(number=None, confidence=0.0, saw_cach=False)
 
         reader = self._ensure_reader()
         # allowlist chỉ chữ số 1–9; không nhận diện ký tự khác.
@@ -304,7 +334,7 @@ class EasyOcrNumberDetector:
 
         # Luôn chạy fallback để phát hiện layout lệch (logo shift phải khiến
         # primary ROI bắt vào chữ "C"/"H" của "CÁCH" và đọc nhầm thành số).
-        fallback = find_number_near_cach(frame, self._wide_roi, reader)
+        fallback, saw_cach = find_number_near_cach(frame, self._wide_roi, reader)
 
         # Chọn kết quả: ưu tiên fallback khi hai bên bất đồng — fallback đọc
         # toàn bộ text nên biết chắc số nằm sau "CÁCH", còn primary đọc blind.
@@ -323,7 +353,9 @@ class EasyOcrNumberDetector:
             number = primary  # chỉ primary có kết quả (hoặc cả hai None)
 
         if number is None:
-            return DetectionResult(number=None, confidence=0.0)
+            return DetectionResult(
+                number=None, confidence=0.0, saw_cach=saw_cach
+            )
 
         # Lấy độ tin cậy: dùng primary confidence nếu đồng thuận, ngưỡng nếu chỉ fallback.
         if primary == number:
@@ -339,23 +371,35 @@ class EasyOcrNumberDetector:
             )
         else:
             confidence = self._threshold
-        return DetectionResult(number=number, confidence=confidence)
+        return DetectionResult(
+            number=number, confidence=confidence, saw_cach=saw_cach
+        )
 
 
 def find_number_near_cach(
     frame,
     wide_roi: tuple[float, float, float, float],
     reader,
-) -> int | None:
+) -> tuple[int | None, bool]:
     """Tìm số cách bằng cách OCR vùng rộng và định vị token số ngay sau "CÁCH".
 
-    Thay vì crop ROI cố định, hàm này:
-    1. OCR toàn bộ *wide_roi* (không allowlist) để lấy cả chữ lẫn số.
-    2. Tìm token có text chứa "CÁCH"/"CACH"/"BACH" (EasyOCR hay mất dấu).
-    3. Trả số từ token gộp ("CÁCH 1") hoặc token số ngay bên phải bbox "CÁCH".
+    Thay vì crop ROI cố định, hàm này thử **ba kỹ thuật** theo thứ tự (số đè lên
+    logo / nét mảnh khiến mỗi video khó theo một kiểu khác nhau):
 
-    Không lọc theo confidence — confidence thấp là bình thường khi OCR chữ có
-    dấu tiếng Việt bằng model English; điều quan trọng là vị trí tương đối.
+    1. **Token gộp** "CÁCH 1" → lấy số cuối token.
+    2. **Token số bên phải**: token "CÁCH" đứng riêng → tìm token số gần nhất bên
+       phải nó (OCR đã tách được số thành token riêng).
+    3. **Zoom + ngưỡng + aspect** (:func:`_zoom_digit_right_of`): crop vùng số
+       ngay phải "CÁCH", phóng to, thử nhiều ngưỡng sáng để OCR số mảnh; nếu OCR
+       vẫn lưỡng lự "1" ↔ "2" thì dùng tỉ lệ rộng/cao của glyph làm tie-break
+       (số "1" hẹp, số "2" rộng).
+
+    Đồng thời trả cờ ``saw_cach``: ``True`` nếu nhìn thấy nhãn "CÁCH" trên frame
+    (dù có đọc được số hay không). Cờ này cho phép phía gọi phân biệt "không có
+    overlay" với "có CÁCH nhưng số không chắc" → tránh âm thầm bỏ sót.
+
+    Không lọc theo confidence khi tìm "CÁCH" — confidence thấp là bình thường khi
+    OCR chữ có dấu tiếng Việt bằng model English; điều quan trọng là vị trí.
 
     Args:
         frame: Mảng numpy (H, W, 3) từ OpenCV.
@@ -364,16 +408,18 @@ def find_number_near_cach(
         reader: ``easyocr.Reader`` đã khởi tạo.
 
     Returns:
-        Con số ``int`` trong ``{1..9}`` nếu tìm được; ``None`` nếu không.
+        Cặp ``(number, saw_cach)``: ``number`` là ``int`` trong ``{1..9}`` nếu
+        tìm được, ngược lại ``None``; ``saw_cach`` là ``True`` nếu thấy nhãn
+        "CÁCH" trên frame.
     """
     wide_img = crop_roi(frame, wide_roi)
     if wide_img is None:
-        return None
+        return None, False
 
     # OCR không có allowlist để nhận cả chữ "CÁCH" lẫn số.
     results = reader.readtext(wide_img)
     if not results:
-        return None
+        return None, False
 
     # Phân tách bbox, text, confidence từ kết quả EasyOCR (detail=1).
     parsed: list[tuple[list, str, float]] = []
@@ -384,21 +430,6 @@ def find_number_near_cach(
         except (ValueError, TypeError):
             continue
 
-    # --- Bước 1: tìm token chứa "CÁCH" (kể cả khi EasyOCR gộp "CÁCH 1" thành
-    # một token hoặc mất dấu thành "BACH"/"CACH"). ---
-    # Pattern nhận dạng (bỏ dấu, không phân biệt hoa/thường):
-    #   - token độc lập: "cach", "cách", "bach" (C → B khi mất dấu)
-    #   - token gộp với số: "cach 1", "bach 1", "cách1", v.v.
-    _CACH_VARIANTS = {"cach", "cách", "bach"}  # "bach" = "cách" bị mất dấu
-
-    def _contains_cach(text: str) -> bool:
-        t = text.lower().strip()
-        # Khớp chính xác hoặc bắt đầu bằng pattern + khoảng trắng/số.
-        for v in _CACH_VARIANTS:
-            if t == v or t.startswith(v + " ") or t.startswith(v + "\t"):
-                return True
-        return False
-
     def _extract_trailing_digit(text: str) -> int | None:
         """Lấy chữ số cuối token nếu EasyOCR gộp 'CÁCH 1' thành một text."""
         parts = text.strip().split()
@@ -406,13 +437,16 @@ def find_number_near_cach(
             return _as_single_digit(parts[-1])
         return None
 
+    saw_cach = False
     for bbox, text, conf in parsed:
-        if not _contains_cach(text):
+        if not _is_cach_token(text):
             continue
+        saw_cach = True
+
         # Trường hợp 1: token gộp "CÁCH 1" → lấy số cuối ngay.
         digit = _extract_trailing_digit(text)
         if digit is not None:
-            return digit
+            return digit, True
 
         # Trường hợp 2: token "CÁCH" đứng riêng → tìm số token ngay bên phải.
         try:
@@ -438,9 +472,162 @@ def find_number_near_cach(
                 best_dist = dx
                 best_num = digit2
         if best_num is not None:
-            return best_num
+            return best_num, True
 
+        # Trường hợp 3: số đè lên logo + nét mảnh nên KHÔNG được OCR tách thành
+        # token ở độ phân giải gốc (vd "con chim"/"con khỉ"/"con sông": số "1"/"2"
+        # nằm ngay trên cuốn sách). Zoom + đa ngưỡng + aspect tie-break.
+        zoom_digit = _zoom_digit_right_of(wide_img, bbox, reader)
+        if zoom_digit is not None:
+            return zoom_digit, True
+
+    return None, saw_cach
+
+
+def _zoom_digit_right_of(wide_img, cach_bbox, reader) -> int | None:
+    """Vớt con số mảnh nằm ngay bên phải bbox "CÁCH" bằng zoom + ngưỡng + aspect.
+
+    Dùng khi số bị đè lên logo / nét quá mảnh nên OCR ở độ phân giải gốc bỏ sót.
+    Quy trình (hiệu chỉnh thực nghiệm trên "con chim"/"con khỉ"/"con sông"):
+
+    1. Crop dải ngang **ngang hàng chữ "CÁCH"** ngay bên phải nó (không nới xuống
+       dưới để loại biểu tượng hai bàn tay vàng nằm thấp hơn), phóng to 6×.
+    2. OCR bản xám + vài ngưỡng nhị phân sáng (số màu trắng tách khỏi nền xanh),
+       **vote** chữ số theo tổng confidence.
+    3. Nếu cuộc vote lưỡng lự giữa "1" và "2" (cả hai cùng xuất hiện, hoặc số mảnh
+       bị đọc nhầm), dùng **tỉ lệ rộng/cao** (aspect) của glyph nửa-trên làm
+       tie-break: glyph "1" hẹp (aspect nhỏ), glyph "2" rộng hơn.
+
+    Trả chữ số ``1..9`` nếu quyết được; ``None`` nếu không.
+
+    Args:
+        wide_img: Ảnh ``wide_roi`` đã crop (numpy ``(h, w, 3)``) — cùng hệ tọa độ
+            với ``cach_bbox``.
+        cach_bbox: bbox của token "CÁCH" (4 điểm ``[x, y]``) trong ``wide_img``.
+        reader: ``easyocr.Reader`` đã khởi tạo.
+    """
+    try:
+        import cv2  # lazy: chỉ cần khi thực sự zoom
+    except ImportError:  # pragma: no cover - cv2 luôn có trong môi trường chạy
+        return None
+    import collections
+
+    try:
+        xs = [pt[0] for pt in cach_bbox]
+        ys = [pt[1] for pt in cach_bbox]
+    except (TypeError, IndexError):
+        return None
+
+    h, w = wide_img.shape[:2]
+    x_right = int(max(xs))
+    y_top = int(min(ys))
+    y_bot = int(max(ys))
+    cw = int(max(xs) - min(xs))
+    ch = int(y_bot - y_top)
+    if cw <= 0 or ch <= 0:
+        return None
+
+    # Vùng số: từ ngay trước mép phải "CÁCH" (số có thể đè lên ký tự cuối) kéo
+    # sang phải ~1.7× bề rộng chữ; dải y BÁM SÁT chữ "CÁCH" (không nới xuống) để
+    # loại biểu tượng bàn tay. Chặn trong khung ảnh.
+    nx0 = _clamp(x_right - int(0.10 * cw), 0, w)
+    nx1 = _clamp(x_right + int(1.7 * cw), 0, w)
+    ny0 = _clamp(y_top - int(0.10 * ch), 0, h)
+    ny1 = _clamp(y_bot + int(0.10 * ch), 0, h)
+    if nx1 <= nx0 or ny1 <= ny0:
+        return None
+
+    num_crop = wide_img[ny0:ny1, nx0:nx1]
+    if num_crop.size == 0:
+        return None
+
+    big = cv2.resize(num_crop, None, fx=6.0, fy=6.0, interpolation=cv2.INTER_CUBIC)
+    gray = cv2.cvtColor(big, cv2.COLOR_BGR2GRAY)
+
+    # --- Bước OCR vote: bản xám + vài ngưỡng sáng ---
+    votes: "collections.Counter[int]" = collections.Counter()
+    images = [gray]
+    for thv in (160, 175, 190, 205):
+        images.append(cv2.threshold(gray, thv, 255, cv2.THRESH_BINARY)[1])
+    for img in images:
+        for item in reader.readtext(img, allowlist="123456789"):
+            try:
+                _bbox, text, conf = item
+            except (ValueError, TypeError):
+                continue
+            digit = _as_single_digit(text)
+            if digit is not None and conf is not None and float(conf) >= 0.45:
+                votes[digit] += float(conf)
+
+    # --- Quyết định: TIN OCR vote khi rõ ràng; chỉ dùng aspect khi OCR im lặng
+    # hoặc lưỡng lự đúng giữa 1↔2. Aspect (rộng/cao glyph) là tín hiệu yếu, KHÔNG
+    # đè kết quả OCR chắc chắn (từng làm hỏng "con sông": cách-1 đọc đúng "1"
+    # nhưng aspect rộng ép thành "2"). ---
+    if votes:
+        # Lọc nhiễu: con số overlay luôn là 1 hoặc 2 trên bộ QIPEDC. Nếu có phiếu
+        # cho 1/2 thì chỉ xét trong {1,2}, bỏ các số lạ ("7"/"9" do mép logo).
+        relevant = {d: s for d, s in votes.items() if d in (1, 2)}
+        if not relevant:
+            # Hoàn toàn không có 1/2 — số lạ không đáng tin → để aspect / None quyết.
+            relevant = None
+
+        if relevant:
+            # Lưỡng lự thật sự: cả 1 lẫn 2 đều có phiếu và sít sao (chênh < 1.5×).
+            if 1 in relevant and 2 in relevant:
+                hi = max(relevant[1], relevant[2])
+                loval = min(relevant[1], relevant[2])
+                if hi < 1.5 * loval:
+                    aspect = _digit_aspect_ratio(gray, cv2)
+                    if aspect is not None:
+                        return 2 if aspect >= _ASPECT_SPLIT else 1
+            # Ngược lại: trả số 1/2 có phiếu cao nhất.
+            return max(relevant, key=relevant.get)
+
+    # OCR không vote được số nào: dùng riêng aspect nếu glyph rõ là 1 hoặc 2.
+    aspect = _digit_aspect_ratio(gray, cv2)
+    if aspect is not None:
+        if aspect <= _ASPECT_ONE_MAX:
+            return 1
+        if aspect >= _ASPECT_TWO_MIN:
+            return 2
     return None
+
+
+# Ngưỡng aspect (rộng/cao của glyph số) phân biệt "1" với "2" — hiệu chỉnh trên
+# video QIPEDC: "1" hẹp (~0.33–0.56), "2" rộng (~0.71–0.83). Vùng đệm ở giữa.
+_ASPECT_ONE_MAX = 0.62
+_ASPECT_TWO_MIN = 0.70
+_ASPECT_SPLIT = 0.66  # điểm chia khi buộc phải chọn 1 hay 2
+
+
+def _digit_aspect_ratio(gray, cv2) -> float | None:
+    """Tỉ lệ rộng/cao của glyph số (contour lớn nhất ở nửa TRÊN ảnh xám đã zoom).
+
+    Số nằm ngang hàng chữ "CÁCH" (nửa trên); biểu tượng bàn tay (nếu lọt vào) nằm
+    nửa dưới nên bị loại bằng điều kiện tâm contour ở nửa trên. Trả ``None`` nếu
+    không tìm được contour số đáng tin.
+    """
+    th = cv2.threshold(gray, 175, 255, cv2.THRESH_BINARY)[1]
+    cnts, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not cnts:
+        return None
+    height = th.shape[0]
+    best = None
+    best_area = 0.0
+    for c in cnts:
+        x, y, bw, bh = cv2.boundingRect(c)
+        # Loại contour nằm chủ yếu ở nửa dưới (bàn tay) và đốm quá nhỏ.
+        if y + bh / 2 > height * 0.55:
+            continue
+        if bh < height * 0.20:
+            continue
+        area = cv2.contourArea(c)
+        if area > best_area:
+            best_area = area
+            best = (bw, bh)
+    if best is None or best[1] <= 0:
+        return None
+    return best[0] / best[1]
 
 
 def _tokens_from_easyocr(results: Iterable) -> list[tuple[str, float]]:
