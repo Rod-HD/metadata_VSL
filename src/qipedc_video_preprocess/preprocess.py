@@ -158,19 +158,38 @@ def run_preprocess(
             else:
                 manual_review_ids.add(clip.video_id)
 
-    # --- Bước 5b: gom video cần rà soát thủ công vào folder riêng ---
+    # --- Bước 5b: gom video cần rà soát vào folder riêng ---
     # Hợp nhất mọi nguồn manual_review: segmenter không phân loại được
     # (kind == "manual_review") + xung đột tên + clip < 1 frame (đã thêm ở trên).
+    inferred_ids: set[str] = set()
     for seg in seg_results:
         if seg.kind == "manual_review":
             manual_review_ids.add(seg.video_id)
+        elif seg.kind == "multi" and getattr(seg, "inferred", False):
+            inferred_ids.add(seg.video_id)
+
     if not dry_run and manual_review_ids:
-        copied = _copy_manual_review(manual_review_ids, discovered_ids, cfg, log)
+        copied = _copy_review_videos(
+            manual_review_ids, discovered_ids, cfg.manual_review_path, "manual_review", log
+        )
         log.info(
             "Đã copy %d/%d video manual_review vào %s",
             copied,
             len(manual_review_ids),
             cfg.manual_review_path,
+        )
+
+    # Video tách bằng SUY LUẬN: đã tách tự động (có clip) nhưng cần người kiểm lại
+    # ranh giới → copy bản gốc vào inferred_review.
+    if not dry_run and inferred_ids:
+        copied = _copy_review_videos(
+            inferred_ids, discovered_ids, cfg.inferred_review_path, "inferred_review", log
+        )
+        log.info(
+            "Đã copy %d/%d video inferred_review (tách bằng suy luận) vào %s",
+            copied,
+            len(inferred_ids),
+            cfg.inferred_review_path,
         )
 
     # --- Bước 6: dựng + ghi bảng nhãn mới (Req 7) ---
@@ -195,18 +214,21 @@ def run_preprocess(
     return report
 
 
-def _copy_manual_review(manual_review_ids, discovered_ids, cfg, log) -> int:
-    """Copy file gốc của mỗi video manual_review vào ``cfg.manual_review_path``.
+def _copy_review_videos(video_ids, discovered_ids, dest_dir, label, log) -> int:
+    """Copy file gốc của mỗi ``video_id`` vào *dest_dir* để con người xem lại.
 
-    File được **copy** (không move/hardlink) để giữ nguyên video nguồn và để
-    folder manual_review tự chứa, dễ mở xem lại. Thư mục được tạo nếu thiếu. Lỗi
-    copy từng file được ghi log và bỏ qua (không làm hỏng cả lần chạy); chỉ video
-    đã thực sự duyệt được (có trong ``discovered_ids``) mới copy được.
+    Dùng chung cho cả ``manual_review`` (cắt tay) lẫn ``inferred_review`` (tách
+    bằng suy luận, cần kiểm ranh giới). File được **copy** (không move/hardlink)
+    để giữ nguyên video nguồn và để folder tự chứa, dễ mở xem lại. Thư mục được
+    tạo nếu thiếu. Lỗi copy từng file được ghi log và bỏ qua (không làm hỏng cả
+    lần chạy); chỉ video đã thực sự duyệt được (có trong ``discovered_ids``) mới
+    copy được.
 
     Args:
-        manual_review_ids: Tập ``video_id`` cần rà soát thủ công (mọi nguồn).
+        video_ids: Tập ``video_id`` cần copy.
         discovered_ids: Mapping ``video_id -> VideoEntry`` (để lấy đường dẫn gốc).
-        cfg: :class:`~qipedc_video_preprocess.config.PreprocessConfig`.
+        dest_dir: Thư mục đích (đường dẫn tuyệt đối trên ``D:``).
+        label: Nhãn để ghi log ("manual_review" / "inferred_review").
         log: Logger của lần chạy.
 
     Returns:
@@ -214,20 +236,20 @@ def _copy_manual_review(manual_review_ids, discovered_ids, cfg, log) -> int:
     """
     import shutil
 
-    dest_dir = cfg.manual_review_path
     try:
         dest_dir.mkdir(parents=True, exist_ok=True)
     except OSError as exc:
-        log.error("Không tạo được thư mục manual_review %s: %s", dest_dir, exc)
+        log.error("Không tạo được thư mục %s %s: %s", label, dest_dir, exc)
         return 0
 
     copied = 0
-    for video_id in sorted(manual_review_ids):
+    for video_id in sorted(video_ids):
         entry = discovered_ids.get(video_id)
         if entry is None:
             # Video không nằm trong tập đã duyệt (vd bị loại từ discovery) → bỏ qua.
             log.warning(
-                "manual_review: không tìm thấy video gốc cho video_id=%s — bỏ qua copy.",
+                "%s: không tìm thấy video gốc cho video_id=%s — bỏ qua copy.",
+                label,
                 video_id,
             )
             continue
@@ -236,9 +258,7 @@ def _copy_manual_review(manual_review_ids, discovered_ids, cfg, log) -> int:
             shutil.copy2(entry.path, dest)
             copied += 1
         except OSError as exc:
-            log.error(
-                "manual_review: lỗi copy %s -> %s: %s", entry.path, dest, exc
-            )
+            log.error("%s: lỗi copy %s -> %s: %s", label, entry.path, dest, exc)
     return copied
 
 

@@ -64,6 +64,11 @@ class SegmentationResult:
             thời gian (rỗng khi ``manual_review``).
         observed_numbers: Chuỗi con số quan sát được trên các frame mẫu (mỗi phần
             tử là ``int`` hoặc ``None`` cho "không có số"), giữ lại để ghi log.
+        inferred: ``True`` nếu phân đoạn multi này được dựng nhờ **SUY LUẬN** (có
+            nhãn "CÁCH" + điểm chuyển số rõ, nhưng OCR không đọc trọn dãy
+            ``1,2,…``; dãy được khôi phục bằng ràng buộc số cách liên tiếp). Các
+            video này vẫn được tách tự động NHƯNG cần con người kiểm lại ranh giới
+            → gom vào folder ``inferred_review``. ``False`` cho mọi kết quả khác.
     """
 
     video_id: str
@@ -71,6 +76,7 @@ class SegmentationResult:
     variant_count: int
     spans: tuple[VariantSpan, ...]
     observed_numbers: tuple[int | None, ...]
+    inferred: bool = False
 
 
 def sample_frame_indices(
@@ -251,6 +257,16 @@ def classify_sequence(
             observed_numbers=observed_numbers,
         )
 
+    # --- SUY LUẬN: OCR không dựng được dãy 1,2,… hợp lệ, nhưng có nhãn "CÁCH"
+    # (any_cach) nghĩa là video CHẮC CHẮN nhiều cách. Dùng ràng buộc "số cách là
+    # dãy liên tiếp 1,2,3,…" + các khối giá trị ổn định theo thời gian để khôi
+    # phục ranh giới. Nếu suy luận được → multi (inferred=True, vào inferred_review
+    # để người kiểm lại). Nếu không → manual_review (cắt tay). ---
+    if any_cach:
+        inferred = _infer_multi_from_cach(samples, lo, hi, confirm, video_id)
+        if inferred is not None:
+            return inferred
+
     # Req 4.3/4.7: mọi trường hợp bất thường còn lại → cần rà soát thủ công.
     return SegmentationResult(
         video_id=video_id,
@@ -258,6 +274,122 @@ def classify_sequence(
         variant_count=0,
         spans=(),
         observed_numbers=observed_numbers,
+    )
+
+
+def _stable_blocks(
+    samples: list[Sample], confirm: int
+) -> list[tuple[int, int, int]]:
+    """Rút các KHỐI giá trị số ỔN ĐỊNH theo thời gian (lọc nhiễu lẻ + None).
+
+    Một "khối" là một đoạn các frame mẫu **liên tiếp** cùng mang một giá trị số
+    ``v`` (bỏ qua ``None`` xen giữa: None = không quan sát, không phá vỡ khối) với
+    độ dài (số frame mẫu thực sự mang ``v``) ``>= confirm``. Giá trị chỉ thoáng
+    qua < ``confirm`` (vd "2" lẻ 1 frame của W00738, hay "7" nhiễu) bị loại.
+
+    Trả danh sách ``(value, start_frame, end_frame)`` theo thứ tự thời gian, với
+    ``start_frame``/``end_frame`` là frame mẫu đầu/cuối của khối (đã gộp đuôi
+    None vào khối liền trước để phủ kín thời gian).
+    """
+    # Gom run liên tiếp cùng giá trị (None là một "giá trị" riêng tạm thời).
+    runs: list[tuple[int | None, int, int, int]] = []  # (val, count, f0, f1)
+    for frame_index, num in samples:
+        if runs and runs[-1][0] == num:
+            v, c, f0, _ = runs[-1]
+            runs[-1] = (v, c + 1, f0, frame_index)
+        else:
+            runs.append((num, 1, frame_index, frame_index))
+
+    # Giữ các run số (không None) đủ dài >= confirm; đây là các khối ổn định.
+    blocks: list[tuple[int, int, int]] = []
+    for val, count, f0, f1 in runs:
+        if val is None:
+            continue
+        if count >= confirm:
+            blocks.append((val, f0, f1))
+
+    # Hợp nhất các khối liền nhau cùng giá trị (phòng khi None chen giữa tách đôi).
+    merged: list[tuple[int, int, int]] = []
+    for val, f0, f1 in blocks:
+        if merged and merged[-1][0] == val:
+            pv, pf0, _ = merged[-1]
+            merged[-1] = (pv, pf0, f1)
+        else:
+            merged.append((val, f0, f1))
+    return merged
+
+
+def _infer_multi_from_cach(
+    samples: list[Sample],
+    lo: int,
+    hi: int,
+    confirm: int,
+    video_id: str,
+) -> "SegmentationResult | None":
+    """SUY LUẬN dãy cách 1,2,…,N từ các khối ổn định khi OCR đọc thiếu/nhiễu.
+
+    Tiền đề: đã biết video có nhãn "CÁCH" (``any_cach``) nên CHẮC CHẮN nhiều cách.
+    Ràng buộc miền: số cách là dãy nguyên LIÊN TIẾP bắt đầu từ 1 theo thời gian.
+
+    Chiến lược (chỉ tách tự động khi có ÍT NHẤT MỘT điểm chuyển rõ — tức >= 2 khối
+    ổn định khác giá trị):
+
+    1. Lấy các khối ổn định (:func:`_stable_blocks`). Cần ``>= 2`` khối **khác
+       giá trị nhau** liền kề (một điểm chuyển thực sự). Chỉ một khối (vd chỉ "2"
+       như D0105 mà "1" không đọc được) vẫn coi là một điểm chuyển: đoạn trước
+       khối "2" chính là cách 1 (suy ngược).
+    2. Bỏ các giá trị trùng lặp liên tiếp; số khối phân biệt = số "mốc" quan sát.
+       Khôi phục nhãn cách theo thứ tự thời gian thành 1,2,3,… BẤT KỂ OCR đọc ra
+       số gì (OCR có thể nhầm 2→7); chỉ dùng VỊ TRÍ chuyển, không tin nhãn số.
+    3. Ranh giới đặt tại đầu mỗi khối (trừ khối đầu bắt đầu từ ``lo``); dựng span
+       liên tục phủ ``[lo, hi]``.
+
+    Trả :class:`SegmentationResult` ``kind="multi", inferred=True`` nếu suy luận
+    được (>= 2 cách); ``None`` nếu không đủ tín hiệu (để phía gọi → manual_review).
+    """
+    observed = tuple(num for _, num in samples)
+    blocks = _stable_blocks(samples, confirm)
+    if not blocks:
+        return None
+
+    # Số mốc theo thời gian: mỗi khối ổn định là một mốc. Nếu mốc đầu tiên KHÔNG
+    # bắt đầu ngay tại lo (có đoạn trước nó — thường là cách 1 không đọc được),
+    # thì đoạn đầu đó là một cách ngầm => thêm một mốc ở phía trước.
+    first_val, first_f0, _ = blocks[0]
+
+    # Danh sách điểm bắt đầu mỗi cách (frame), theo thời gian.
+    starts: list[int] = []
+    if first_f0 > lo:
+        # Có đoạn [lo, first_f0) trước khối đầu → đó là cách 1 (suy ngược).
+        starts.append(lo)
+    for _, f0, _ in blocks:
+        starts.append(f0)
+
+    # Khử mốc trùng (nếu first_f0 == lo thì khối đầu đã là cách 1).
+    starts = sorted(set(starts))
+    n_variants = len(starts)
+
+    # Chỉ tách tự động khi có điểm chuyển thực sự (>= 2 cách).
+    if n_variants < 2:
+        return None
+
+    spans: list[VariantSpan] = []
+    for k in range(n_variants):
+        start = starts[k]
+        end = hi if k == n_variants - 1 else starts[k + 1] - 1
+        if end < start:
+            return None  # mốc chồng lấn bất thường → để manual_review
+        spans.append(
+            VariantSpan(variant_index=k + 1, start_frame=start, end_frame=end)
+        )
+
+    return SegmentationResult(
+        video_id=video_id,
+        kind="multi",
+        variant_count=n_variants,
+        spans=tuple(spans),
+        observed_numbers=observed,
+        inferred=True,
     )
 
 
@@ -490,6 +622,17 @@ def segment_video(
 
         # Chỉ video nhiều cách mới có ranh giới nội bộ cần tinh chỉnh (Req 4.4).
         if result.kind != "multi" or len(result.spans) < 2:
+            return result
+
+        # Video SUY LUẬN: OCR không đọc nổi con số nên refine_boundary (dò theo số)
+        # sẽ không tìm thấy gì → giữ nguyên ranh giới thô từ các khối ổn định. Các
+        # video này sẽ được người kiểm lại trong inferred_review.
+        if result.inferred:
+            log.info(
+                "segment_video[%s]: dùng ranh giới SUY LUẬN (inferred) — bỏ qua "
+                "refine theo số, gom vào inferred_review.",
+                entry.video_id,
+            )
             return result
 
         coarse_spans = result.spans

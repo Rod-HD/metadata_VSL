@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from qipedc_video_preprocess.config import PreprocessConfig
-from qipedc_video_preprocess.preprocess import _copy_manual_review
+from qipedc_video_preprocess.preprocess import _copy_review_videos
 
 
 @dataclass
@@ -70,7 +70,9 @@ def test_copies_originals_into_manual_review_dir():
             discovered[vid] = _Entry(path=p)
 
         logger, _ = _logger()
-        copied = _copy_manual_review({"D0001", "D0002"}, discovered, cfg, logger)
+        copied = _copy_review_videos(
+            {"D0001", "D0002"}, discovered, cfg.manual_review_path, "manual_review", logger
+        )
 
         assert copied == 2
         for vid in ("D0001", "D0002"):
@@ -95,7 +97,9 @@ def test_skips_unknown_video_id_with_warning():
         discovered = {"D0001": _Entry(path=p)}
 
         logger, handler = _logger()
-        copied = _copy_manual_review({"D0001", "GHOST"}, discovered, cfg, logger)
+        copied = _copy_review_videos(
+            {"D0001", "GHOST"}, discovered, cfg.manual_review_path, "manual_review", logger
+        )
 
         assert copied == 1
         assert (cfg.manual_review_path / "D0001.mp4").is_file()
@@ -129,7 +133,9 @@ def test_copy_error_is_logged_and_skipped(monkeypatch):
         monkeypatch.setattr(_shutil, "copy2", flaky_copy)
 
         logger, handler = _logger()
-        copied = _copy_manual_review({"GOOD", "BAD"}, discovered, cfg, logger)
+        copied = _copy_review_videos(
+            {"GOOD", "BAD"}, discovered, cfg.manual_review_path, "manual_review", logger
+        )
 
         assert copied == 1
         assert (cfg.manual_review_path / "GOOD.mp4").is_file()
@@ -155,3 +161,45 @@ def test_manual_review_dir_outside_tree_flagged():
         )
         errors = cfg.validate()
         assert any("manual_review_dir" in e for e in errors), errors
+
+
+def test_copy_into_inferred_review_dir():
+    """Cùng helper copy được vào inferred_review_path (folder video tách-suy-luận)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        cfg = _make_cfg(root)
+        src_dir = root / "src_videos"
+        src_dir.mkdir()
+        p = src_dir / "D0105.mp4"
+        p.write_bytes(b"inferred-clip")
+        discovered = {"D0105": _Entry(path=p)}
+
+        logger, _ = _logger()
+        copied = _copy_review_videos(
+            {"D0105"}, discovered, cfg.inferred_review_path, "inferred_review", logger
+        )
+        assert copied == 1
+        dest = cfg.inferred_review_path / "D0105.mp4"
+        assert dest.is_file()
+        assert dest.read_bytes() == b"inferred-clip"
+        # gốc còn (copy, không move)
+        assert p.is_file()
+
+
+def test_inferred_review_dir_validated_on_d_drive():
+    """inferred_review_dir mặc định nằm trong cây dự án trên D: → validate() OK."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = PreprocessConfig(project_root=Path(tmp))
+        errors = cfg.validate()
+        assert not any("inferred_review_dir" in e for e in errors), errors
+
+
+def test_inferred_review_dir_outside_tree_flagged():
+    """inferred_review_dir trỏ ra ngoài cây dự án → validate() báo lỗi."""
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = PreprocessConfig(
+            project_root=Path(tmp),
+            inferred_review_dir="D:/somewhere_else/inferred_review",
+        )
+        errors = cfg.validate()
+        assert any("inferred_review_dir" in e for e in errors), errors

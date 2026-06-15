@@ -140,3 +140,72 @@ def test_backward_compatible_without_flags():
     samples = [(0, None), (30, None)]
     res = classify_sequence(samples, _cfg(), video_id="VID")
     assert res.kind == "single"
+
+
+# --------------------------------------------------------------------------- #
+# SUY LUẬN theo chuỗi: khôi phục dãy 1,2,… khi OCR đọc thiếu/nhiễu
+# --------------------------------------------------------------------------- #
+def test_infer_missing_first_variant():
+    """Đọc được '2' (ổn định) nhưng '1' toàn None → suy ngược cách 1 (ca D0105).
+
+    Có CÁCH + một khối '2' ổn định mà phía trước có đoạn chưa đọc được → đoạn đầu
+    là cách 1. Tách tự động NHƯNG đánh dấu inferred (vào inferred_review).
+    """
+    samples = [(0, None), (30, None), (60, None), (90, None), (120, 2), (150, 2), (180, 2)]
+    res = classify_sequence(
+        samples, _cfg(confirm=2), video_id="D0105", saw_cach_flags=[True] * 7
+    )
+    assert res.kind == "multi"
+    assert res.inferred is True
+    assert res.variant_count == 2
+    assert res.spans[0].start_frame == 0  # cách 1 suy ngược từ đầu
+    assert res.spans[1].start_frame == 120  # cách 2 từ khối '2'
+
+
+def test_infer_two_to_three_recovers_full_sequence():
+    """Chỉ khối cuối đọc được ('3'), phía trước None → suy ra 2 cách (1 rồi 3-block)."""
+    samples = [(0, None), (30, None), (60, 3), (90, 3), (120, 3)]
+    res = classify_sequence(
+        samples, _cfg(confirm=2), video_id="VID", saw_cach_flags=[True] * 5
+    )
+    assert res.kind == "multi"
+    assert res.inferred is True
+    assert res.variant_count == 2
+
+
+def test_clean_sequence_is_multi_not_inferred():
+    """OCR đọc trọn 1→2 hợp lệ → multi BÌNH THƯỜNG (inferred=False, không cần suy luận)."""
+    samples = [(0, 1), (30, 1), (60, 1), (90, 2), (120, 2), (150, 2)]
+    res = classify_sequence(
+        samples, _cfg(confirm=2), video_id="VID", saw_cach_flags=[True] * 6
+    )
+    assert res.kind == "multi"
+    assert res.inferred is False
+
+
+def test_no_stable_transition_falls_to_manual_review():
+    """Có CÁCH nhưng KHÔNG có khối chuyển ổn định ('2' lẻ giữa toàn '1') → manual_review.
+
+    Ca "con chim" W00738: số '2' bị đọc nhầm thành '1' gần hết, chỉ lẻ 1 frame →
+    không suy luận nổi → cắt tay.
+    """
+    samples = [(0, 1), (30, 1), (60, 1), (90, 2), (120, 1), (150, 1), (180, 1)]
+    res = classify_sequence(
+        samples, _cfg(confirm=2), video_id="W00738", saw_cach_flags=[True] * 7
+    )
+    assert res.kind == "manual_review"
+    assert res.inferred is False
+
+
+def test_inference_requires_cach():
+    """Không có CÁCH thì KHÔNG suy luận (dù chuỗi giống) — tránh tách bừa video 1-cách.
+
+    (Trên thực tế video một-cách không có overlay nên saw_cach toàn False.)
+    """
+    samples = [(0, None), (30, None), (60, 2), (90, 2), (120, 2)]
+    res = classify_sequence(
+        samples, _cfg(confirm=2), video_id="VID", saw_cach_flags=[False] * 5
+    )
+    # Không CÁCH + chuỗi chỉ '2' (thiếu 1) → manual_review theo luật cũ, KHÔNG infer.
+    assert res.kind == "manual_review"
+    assert res.inferred is False
