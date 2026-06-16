@@ -5172,7 +5172,7 @@
     "length_seconds": 3.07
   },
   {
-    "video_id": "W00767",
+    "video_id": "W00767_c1",
     "gloss": "con khỉ",
     "region": "Chung",
     "topic": "Động vật",
@@ -5180,8 +5180,20 @@
     "signer_id": "004",
     "fps": 30.0,
     "resolution": 720,
-    "num_frames": 205,
-    "length_seconds": 6.83
+    "num_frames": 105,
+    "length_seconds": 3.5
+  },
+  {
+    "video_id": "W00767_c2",
+    "gloss": "con khỉ",
+    "region": "Chung",
+    "topic": "Động vật",
+    "id": "1586",
+    "signer_id": "004",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 94,
+    "length_seconds": 3.13
   },
   {
     "video_id": "W00768N",
@@ -5460,7 +5472,7 @@
     "length_seconds": 2.5
   },
   {
-    "video_id": "W00792",
+    "video_id": "W00792_c1",
     "gloss": "con sông",
     "region": "Chung",
     "topic": "Động vật",
@@ -5468,8 +5480,20 @@
     "signer_id": "004",
     "fps": 30.0,
     "resolution": 720,
-    "num_frames": 188,
-    "length_seconds": 6.27
+    "num_frames": 9,
+    "length_seconds": 0.3
+  },
+  {
+    "video_id": "W00792_c2",
+    "gloss": "con sông",
+    "region": "Chung",
+    "topic": "Động vật",
+    "id": "1625",
+    "signer_id": "004",
+    "fps": 30.0,
+    "resolution": 720,
+    "num_frames": 173,
+    "length_seconds": 5.77
   },
   {
     "video_id": "W00793",

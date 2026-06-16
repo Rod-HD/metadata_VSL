@@ -4,21 +4,21 @@
 
 # Large media and generated artifacts (never committed).
 # NOTE: ignore the *contents* of processed_videos with /* (not the dir itself),
-# so the split_variants/ subtree below can be re-included as a tracked deliverable.
+# so tracked deliverables below can be re-included explicitly.
 Dataset/processed_videos/*
 Dataset/raw_videos/
 Dataset/by_signer/
 Dataset/models/
 
-# Exception: keep the multi-variant splitter LABELS as a tracked deliverable, but
-# not the clip .mp4s themselves (a full 1000-video run is ~634 MB of binaries).
-!Dataset/processed_videos/split_variants/
-Dataset/processed_videos/split_variants/*.mp4
+# Tracked deliverables under processed_videos/ (labels + metadata, no .mp4s)
+!Dataset/processed_videos/labels_split.xlsx
+!Dataset/processed_videos/metadata/
+Dataset/processed_videos/metadata/embeddings.npz
+Dataset/processed_videos/metadata/clip_store.json
+Dataset/processed_videos/metadata/clip_store_embeddings.npz
+Dataset/processed_videos/metadata/signer_registry.json
+
 Dataset/labels/vsl400/*.zip
-Dataset/final_dataset/embeddings.npz
-Dataset/final_dataset/clip_store.json
-Dataset/final_dataset/clip_store_embeddings.npz
-Dataset/final_dataset/signer_registry.json
 
 # Python bytecode
 __pycache__/

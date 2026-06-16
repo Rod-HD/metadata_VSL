@@ -38,7 +38,7 @@ class Config:
     vsl400_dir: str = "Dataset/labels/vsl400"
 
     # --- output (Req 5) ---
-    output_dir: str = "Dataset/final_dataset"
+    output_dir: str = "Dataset/processed_videos/metadata"
     output_view_name: str = "front_view"  # OQ2
     log_dir: str = "Dataset/logs"
 

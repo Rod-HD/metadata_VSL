@@ -48,7 +48,7 @@ class PreprocessConfig:
 
     # --- đầu ra (Req 1.2, 5) ---
     split_output_dir: str = "Dataset/processed_videos/split_variants"
-    new_labels_path: str = "Dataset/processed_videos/split_variants/labels_split.xlsx"
+    new_labels_path: str = "Dataset/processed_videos/labels_split.xlsx"
     log_dir: str = "Dataset/logs"
     # Thư mục gom video cần rà soát thủ công (segmenter không phân loại được,
     # xung đột tên, hoặc clip < 1 frame). File gốc được COPY vào đây để xem lại.

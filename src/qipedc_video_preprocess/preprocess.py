@@ -180,16 +180,21 @@ def run_preprocess(
         )
 
     # Video tách bằng SUY LUẬN: đã tách tự động (có clip) nhưng cần người kiểm lại
-    # ranh giới → copy bản gốc vào inferred_review.
+    # ranh giới → copy cả các clip đã cắt lẫn bản gốc vào inferred_review, để
+    # người review thấy ngay kết quả dự đoán mà không phải tự seek video gốc.
     if not dry_run and inferred_ids:
-        copied = _copy_review_videos(
-            inferred_ids, discovered_ids, cfg.inferred_review_path, "inferred_review", log
+        inferred_dir = cfg.inferred_review_path
+        # 1) Copy các clip sub-variant đã cắt (D0105_c1.mp4, D0105_c2.mp4, ...).
+        copied_clips = _copy_inferred_clips(inferred_ids, clips, split_dir, inferred_dir, log)
+        # 2) Copy bản gốc (D0105.mp4) để người review so sánh ranh giới thực tế.
+        copied_orig = _copy_review_videos(
+            inferred_ids, discovered_ids, inferred_dir, "inferred_review", log
         )
         log.info(
-            "Đã copy %d/%d video inferred_review (tách bằng suy luận) vào %s",
-            copied,
-            len(inferred_ids),
-            cfg.inferred_review_path,
+            "inferred_review: copy %d clip đã cắt + %d bản gốc vào %s",
+            copied_clips,
+            copied_orig,
+            inferred_dir,
         )
 
     # --- Bước 6: dựng + ghi bảng nhãn mới (Req 7) ---
@@ -259,6 +264,40 @@ def _copy_review_videos(video_ids, discovered_ids, dest_dir, label, log) -> int:
             copied += 1
         except OSError as exc:
             log.error("%s: lỗi copy %s -> %s: %s", label, entry.path, dest, exc)
+    return copied
+
+
+def _copy_inferred_clips(inferred_ids, clips, split_dir, dest_dir, log) -> int:
+    """Copy các clip đã cắt của video inferred vào *dest_dir* để người review xem ngay.
+
+    Chỉ copy clip thuộc video_id có trong *inferred_ids* (tức multi+inferred).
+    File nguồn lấy từ *split_dir* (nơi write_clip vừa ghi ra).
+
+    Returns:
+        Số clip đã copy thành công.
+    """
+    import shutil
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        log.error("Không tạo được thư mục inferred_review %s: %s", dest_dir, exc)
+        return 0
+
+    copied = 0
+    for clip in clips:
+        if clip.video_id not in inferred_ids:
+            continue
+        src = split_dir / clip.out_filename
+        if not src.is_file():
+            log.warning("inferred_review: clip %s không tìm thấy tại %s — bỏ qua.", clip.out_filename, src)
+            continue
+        dest = dest_dir / clip.out_filename
+        try:
+            shutil.copy2(src, dest)
+            copied += 1
+        except OSError as exc:
+            log.error("inferred_review: lỗi copy %s -> %s: %s", src, dest, exc)
     return copied
 
 

@@ -352,20 +352,19 @@ def _infer_multi_from_cach(
     if not blocks:
         return None
 
-    # Số mốc theo thời gian: mỗi khối ổn định là một mốc. Nếu mốc đầu tiên KHÔNG
-    # bắt đầu ngay tại lo (có đoạn trước nó — thường là cách 1 không đọc được),
-    # thì đoạn đầu đó là một cách ngầm => thêm một mốc ở phía trước.
+    # Chỉ suy luận khi có >= 2 khối ổn định khác giá trị — tức có ít nhất 1 điểm
+    # chuyển thực sự quan sát được. Không suy ngược từ đoạn None đầu video: đoạn
+    # None trước khối đầu có thể chỉ là overlay chưa rõ ràng, không phải cách riêng.
+    if len(blocks) < 2:
+        return None
+
     first_val, first_f0, _ = blocks[0]
 
-    # Danh sách điểm bắt đầu mỗi cách (frame), theo thời gian.
-    starts: list[int] = []
-    if first_f0 > lo:
-        # Có đoạn [lo, first_f0) trước khối đầu → đó là cách 1 (suy ngược).
-        starts.append(lo)
-    for _, f0, _ in blocks:
+    # Ranh giới đặt tại frame đầu của mỗi khối ổn định; khối đầu bắt đầu từ lo.
+    starts: list[int] = [lo]
+    for _, f0, _ in blocks[1:]:
         starts.append(f0)
 
-    # Khử mốc trùng (nếu first_f0 == lo thì khối đầu đã là cách 1).
     starts = sorted(set(starts))
     n_variants = len(starts)
 

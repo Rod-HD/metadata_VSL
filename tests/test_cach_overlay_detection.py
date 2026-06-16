@@ -21,7 +21,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from qipedc_video_preprocess.config import PreprocessConfig
-from qipedc_video_preprocess.number_detector import DetectionResult, _is_cach_token
+from qipedc_video_preprocess.number_detector import (
+    DetectionResult,
+    _is_cach_token,
+    _is_cach_fragment,
+    _QIPEDC_NOISE_RE,
+    _DIACRITIC_MAP,
+)
 from qipedc_video_preprocess.segmenter import classify_sequence
 
 # project_root giả lập trên ổ D: (Req 1.3); classify_sequence chỉ đọc
@@ -51,8 +57,15 @@ def test_detection_result_saw_cach_settable():
 # _is_cach_token — nhận dạng nhãn "CÁCH" qua các biến thể OCR thực tế
 # --------------------------------------------------------------------------- #
 def test_cach_token_matches_observed_ocr_variants():
-    """Biến thể quan sát thực tế trên QIPEDC: Cach/Cacl/Cack/Bach + 'Cach 2'."""
-    for tok in ("Cach", "cach", "Cách", "Cacl", "Cack", "Bach", "Cach 2", "cacl 1"):
+    """Biến thể quan sát thực tế trên QIPEDC: Cach/Cacl/Cack/Bach + 'Cach 2'.
+
+    D0105 vi+en reader: logo che → OCR đọc 'P█GH 1'/'c█CH 2' (block char █ giữa token).
+    D0105 en-only reader: bọc trong dấu nháy → "'SacH 1'" (C→S, quoted).
+    Sau strip non-alpha + strip nháy đầu/cuối → match nhánh [cpbs]..ch/gh hoặc [cs]ac..
+    """
+    for tok in ("Cach", "cach", "Cách", "Cacl", "Cack", "Bach", "Cach 2", "cacl 1",
+                "P█GH 1", "c█CH 2", "c█GH 2",
+                "'SacH 1'", "'SacH 2'", "'SAcH 2'"):
         assert _is_cach_token(tok), tok
 
 
@@ -60,6 +73,50 @@ def test_cach_token_rejects_non_cach():
     """Không khớp logo/nhãn khác để tránh dương tính giả."""
     for tok in ("QIPEDC", "Q1PEDC", "con chim", "2", "", "ca", "back"):
         assert not _is_cach_token(tok), tok
+
+
+# --------------------------------------------------------------------------- #
+# _is_cach_fragment — nhận dạng mảnh nhỏ của "CÁCH"
+# --------------------------------------------------------------------------- #
+def test_cach_fragment_accepts_full_token():
+    """Token đầy đủ → fragment cũng True (superset)."""
+    for tok in ("Cach", "Cacl", "Bach", "Cách"):
+        assert _is_cach_fragment(tok), tok
+
+
+def test_cach_fragment_accepts_partial():
+    """Mảnh nhỏ 'ca', 'ch', 'á', ký tự có dấu → True."""
+    for tok in ("ca", "ch", "á", "ă", "Ca", "CH"):
+        assert _is_cach_fragment(tok), tok
+
+
+def test_cach_fragment_rejects_unrelated():
+    """Ký tự đơn số, QIPEDC, 'back' tiếng Anh → False."""
+    for tok in ("2", "1", "QIPEDC", "back", "", "Q"):
+        assert not _is_cach_fragment(tok), tok
+
+
+# --------------------------------------------------------------------------- #
+# _QIPEDC_NOISE_RE — lọc token nhiễu cố định của logo/QIPEDC
+# --------------------------------------------------------------------------- #
+def _norm(text: str) -> str:
+    return text.strip().lower().translate(_DIACRITIC_MAP)
+
+
+def test_qipedc_noise_re_matches_logo_tokens():
+    """Token cố định của logo QIPEDC (xuất hiện cả ở video single) → bị lọc."""
+    for tok in ("QIPEDC", "qipedc", "Q1PEDC", "l", "I", "|", "1", "o", "O", "0", "-", "_"):
+        assert _QIPEDC_NOISE_RE.match(_norm(tok)), f"expected noise: {tok!r}"
+
+
+def test_qipedc_noise_re_passes_overlay_tokens():
+    """Token của overlay CÁCH (KHÔNG phải logo) → KHÔNG bị lọc bởi noise RE."""
+    for tok in ("Cach", "ca", "ch", "á", "2", "3", "Bach", "Cacl"):
+        # Token số đơn "2"/"3" không khớp noise RE (noise RE chỉ lọc "l"/"I"/"1"/"o"/"0")
+        # → Pass 3 sẽ thấy chúng và bật saw_cach.
+        # Ngoại trừ: "1" là nhiễu logo, nhưng digit_tokens xử lý riêng qua allowlist.
+        if tok in ("2", "3", "ca", "ch", "á", "Bach", "Cacl", "Cach"):
+            assert not _QIPEDC_NOISE_RE.match(_norm(tok)), f"should not be noise: {tok!r}"
 
 
 # --------------------------------------------------------------------------- #
@@ -146,31 +203,31 @@ def test_backward_compatible_without_flags():
 # SUY LUẬN theo chuỗi: khôi phục dãy 1,2,… khi OCR đọc thiếu/nhiễu
 # --------------------------------------------------------------------------- #
 def test_infer_missing_first_variant():
-    """Đọc được '2' (ổn định) nhưng '1' toàn None → suy ngược cách 1 (ca D0105).
+    """Chỉ đọc được '2' (ổn định), '1' toàn None → KHÔNG suy ngược (D0105 thực tế).
 
-    Có CÁCH + một khối '2' ổn định mà phía trước có đoạn chưa đọc được → đoạn đầu
-    là cách 1. Tách tự động NHƯNG đánh dấu inferred (vào inferred_review).
+    Một khối ổn định duy nhất không đủ tín hiệu để xác định ranh giới cắt:
+    đoạn None phía trước có thể là overlay chưa rõ ràng, không phải cách riêng.
+    → manual_review để người xem xét.
     """
     samples = [(0, None), (30, None), (60, None), (90, None), (120, 2), (150, 2), (180, 2)]
     res = classify_sequence(
         samples, _cfg(confirm=2), video_id="D0105", saw_cach_flags=[True] * 7
     )
-    assert res.kind == "multi"
-    assert res.inferred is True
-    assert res.variant_count == 2
-    assert res.spans[0].start_frame == 0  # cách 1 suy ngược từ đầu
-    assert res.spans[1].start_frame == 120  # cách 2 từ khối '2'
+    assert res.kind == "manual_review"
+    assert res.inferred is False
 
 
 def test_infer_two_to_three_recovers_full_sequence():
-    """Chỉ khối cuối đọc được ('3'), phía trước None → suy ra 2 cách (1 rồi 3-block)."""
+    """Hai khối khác giá trị (None rồi '3') → KHÔNG đủ vì None không phải khối số.
+
+    Chỉ có 1 khối số ổn định ('3') → manual_review, không suy luận ranh giới.
+    """
     samples = [(0, None), (30, None), (60, 3), (90, 3), (120, 3)]
     res = classify_sequence(
         samples, _cfg(confirm=2), video_id="VID", saw_cach_flags=[True] * 5
     )
-    assert res.kind == "multi"
-    assert res.inferred is True
-    assert res.variant_count == 2
+    assert res.kind == "manual_review"
+    assert res.inferred is False
 
 
 def test_clean_sequence_is_multi_not_inferred():
